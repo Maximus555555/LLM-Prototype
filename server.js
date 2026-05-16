@@ -375,6 +375,78 @@ function extractHtmlTitle(html, fallback = '') {
   return stripHtmlToText(title).slice(0, 240) || fallback || 'Untitled webpage';
 }
 
+function extractUrls(text) {
+  return [...String(text || '').matchAll(/https?:\/\/[^\s<>)"']+/gi)]
+    .map((match) => normalizeUrl(match[0].replace(/[.,;:!?]+$/, '')))
+    .filter(Boolean);
+}
+
+function splitSentences(text) {
+  return String(text || '')
+    .replace(/\s+/g, ' ')
+    .match(/[^.!?]+[.!?]+|[^.!?]+$/g)
+    ?.map((sentence) => sentence.trim())
+    .filter((sentence) => sentence.length > 35) || [];
+}
+
+function extractNamesDatesNumbers(text) {
+  const source = String(text || '');
+  const names = [...new Set((source.match(/\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,3}\b/g) || [])
+    .filter((name) => !/^(The|This|That|These|Those|When|Where|What|Article|Source)\b/.test(name)))].slice(0, 12);
+  const dates = [...new Set(source.match(/\b(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+\d{1,2},?\s+\d{2,4}\b|\b\d{4}-\d{2}-\d{2}\b|\b\d{1,2}\/\d{1,2}\/\d{2,4}\b|\b(?:19|20)\d{2}\b/g) || [])].slice(0, 12);
+  const numbers = [...new Set(source.match(/\b\d+(?:\.\d+)?(?:%|\s?(?:million|billion|trillion|thousand|hours?|days?|weeks?|months?|years?|people|users|dollars?))?\b/gi) || [])].slice(0, 16);
+  return { names, dates, numbers };
+}
+
+function formatArticleSummary(page, item) {
+  const summary = item?.summary || summarizeText(page.text, page.title);
+  const sentences = splitSentences(page.text);
+  const keyPoints = (summary ? splitSentences(summary) : sentences).slice(0, 5);
+  const importantDetails = sentences
+    .filter((sentence) => /\b(announced|reported|said|according|found|percent|million|billion|first|last|because|however|including|published|updated)\b/i.test(sentence))
+    .slice(0, 6);
+  const entities = extractNamesDatesNumbers(`${page.title}. ${page.text.slice(0, 12000)}`);
+  return [
+    `Short summary: ${summary || 'I retrieved the page, but it did not contain enough readable article text for a confident summary.'}`,
+    '',
+    'Key points:',
+    ...(keyPoints.length ? keyPoints.map((point) => `- ${point}`) : ['- No clear key points could be extracted from the readable page text.']),
+    '',
+    'Important details:',
+    ...(importantDetails.length ? importantDetails.map((detail) => `- ${detail}`) : ['- No additional important details were clearly extractable.']),
+    '',
+    'Names/dates/numbers mentioned:',
+    `- Names: ${entities.names.join(', ') || 'None clearly detected.'}`,
+    `- Dates: ${entities.dates.join(', ') || 'None clearly detected.'}`,
+    `- Numbers: ${entities.numbers.join(', ') || 'None clearly detected.'}`,
+    '',
+    `Source URL: ${page.url}`,
+  ].join('\n');
+}
+
+function findArticleDetails(page, query, limit = 6) {
+  const queryTokens = uniqueTokens(query);
+  const sentences = splitSentences(page.text);
+  if (!queryTokens.size) {
+    return sentences.slice(0, limit);
+  }
+  return sentences
+    .map((sentence, index) => {
+      const tokens = uniqueTokens(sentence);
+      let overlap = 0;
+      for (const token of queryTokens) {
+        if (tokens.has(token)) {
+          overlap += 1;
+        }
+      }
+      return { sentence, score: overlap + overlap / Math.max(1, Math.sqrt(tokens.size)) - index * 0.001 };
+    })
+    .filter((item) => item.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit)
+    .map((item) => item.sentence);
+}
+
 async function fetchWithTimeout(url, options = {}) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), options.timeoutMs || WEB_FETCH_TIMEOUT_MS);
@@ -464,7 +536,7 @@ async function webSearch(query, limit = WEB_SEARCH_MAX_RESULTS) {
 
 async function retrieveWebpageText(url) {
   const normalizedUrl = normalizeUrl(url);
-  if (!normalizedUrl) {
+  if (!normalizedUrl || !/^https?:\/\//i.test(normalizedUrl)) {
     throw new Error('A valid http(s) URL is required.');
   }
   const response = await fetchWithTimeout(normalizedUrl);
@@ -554,14 +626,48 @@ function searchStoredWebKnowledge(query, limit = 5) {
 
 function extractSearchQuery(message) {
   const text = String(message || '').trim();
-  const explicit = /\b(search|look up|browse|internet|web|online|google|duckduckgo|find current|latest)\b/i.test(text);
-  if (!explicit) {
+  const trigger = 'search the internet for';
+  const index = text.toLowerCase().indexOf(trigger);
+  if (index === -1) {
     return '';
   }
-  return text
-    .replace(/^\s*(please\s+)?(search|look up|browse|find)\s+(the\s+)?(internet|web|online)?\s*(for|about)?\s*/i, '')
-    .replace(/\b(on the internet|online|on the web)\b/ig, '')
-    .trim() || text;
+  return text.slice(index + trigger.length).trim() || text;
+}
+
+async function answerWithArticleUrl(message, memory) {
+  const urls = extractUrls(message);
+  if (!urls.length) {
+    return null;
+  }
+  const page = await retrieveWebpageText(urls[0]);
+  const saved = storeWebKnowledgeItem({
+    url: page.url,
+    title: page.title,
+    text: page.text,
+    summary: summarizeText(page.text, page.title),
+    keywords: extractKeywords(`${page.title} ${page.text}`, 12),
+    sourceType: 'user-provided-url',
+  });
+  const query = String(message || '').replace(urls[0], '').trim();
+  const wantsSummary = /\b(summarize|summary|key points?|important details?|names?|dates?|numbers?|article|webpage|page)\b/i.test(query) || query.length < 12;
+  const details = wantsSummary ? [] : findArticleDetails(page, query);
+  const answer = wantsSummary
+    ? formatArticleSummary(page, saved.item)
+    : [
+      `I searched within the retrieved page text for: “${query}”.`,
+      ...(details.length
+        ? details.map((detail, index) => `${index + 1}. ${detail}`)
+        : ['I could not find a clear matching detail in the readable page text.']),
+      `Source URL: ${page.url}`,
+    ].join('\n\n');
+
+  return {
+    answer,
+    memory,
+    sources: [{ source: page.url, title: page.title, chunk: 1, content: saved.item.summary, score: 1, type: 'user-provided-url' }],
+    documents: loadKnowledgeBase().documents,
+    saved: saved.saved ? 1 : 0,
+  };
 }
 
 async function answerWithInternetSearch(message, memory) {
@@ -901,7 +1007,7 @@ function answerBasicConversation(message, memory, documentCount) {
     return [
       'I can handle basic conversation, arithmetic, short explanations, and simple follow-up context in this chat.',
       `I can also search ${documentCount} local knowledge file(s) for project-specific answers.`,
-      'For facts outside those files, explicitly ask me to search the internet and I can retrieve, summarize, and save webpages locally.',
+      'For broader web results, include the exact phrase “search the internet for” and I can retrieve, summarize, and save webpages locally.',
     ].join(' ');
   }
 
@@ -922,7 +1028,7 @@ function createFallback(message, memory) {
   const topic = tokenize(message).slice(0, 6).join(', ') || 'that topic';
   const followUp = memory.recentUserTopics.length > 1
     ? 'If this is a follow-up, add one more detail and I will connect it to the current chat context.'
-    : 'You can ask conversational questions, basic math, questions about stored knowledge, or explicitly ask me to search the internet.';
+    : 'You can ask conversational questions, basic math, questions about stored knowledge, paste a URL for article/page help, or include the exact phrase “search the internet for” to run web search.';
   return [
     `I am not fully sure how to answer ${topic} from the local knowledge I have right now.`,
     'I can still help with basic conversation, arithmetic, and project questions grounded in local files.',
@@ -1037,6 +1143,17 @@ async function createLocalChatResponseAsync({ message, history }) {
       sources: search.matches,
       documents: search.documents,
     };
+  }
+  if (extractUrls(normalizedMessage).length) {
+    activeChatResponses += 1;
+    try {
+      const articleAnswer = await answerWithArticleUrl(normalizedMessage, memory);
+      if (articleAnswer) {
+        return articleAnswer;
+      }
+    } finally {
+      activeChatResponses = Math.max(0, activeChatResponses - 1);
+    }
   }
   const query = extractSearchQuery(normalizedMessage);
   if (query) {
@@ -1340,7 +1457,7 @@ async function handleApi(request, response, url) {
     sendJson(response, 200, {
       runtime: 'local-chat',
       ...result,
-      console: 'Answered with local conversation memory, local/web knowledge retrieval, and optional no-key internet search. No external AI service was contacted.',
+      console: 'Answered with local conversation memory and local/page retrieval. User-triggered web search runs only for the exact phrase “search the internet for”. No external AI service was contacted.',
     });
     return;
   }
@@ -1474,6 +1591,9 @@ module.exports = {
   createLocalChatResponse,
   createLocalChatResponseAsync,
   extractSearchQuery,
+  extractUrls,
+  extractNamesDatesNumbers,
+  findArticleDetails,
   extractUserProvidedKnowledge,
   searchStoredWebKnowledge,
   parseMathExpression,

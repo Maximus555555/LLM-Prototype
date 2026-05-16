@@ -1,61 +1,63 @@
+const q = (selector) => document.querySelector(selector);
+
 const elements = {
-  serverStatus: document.querySelector('#serverStatus'),
-  runtimeStatus: document.querySelector('#runtimeStatus'),
-  chatHistory: document.querySelector('#chatHistory'),
-  chatForm: document.querySelector('#chatForm'),
-  messageInput: document.querySelector('#messageInput'),
-  sendButton: document.querySelector('#sendButton'),
-  clearChatButton: document.querySelector('#clearChatButton'),
-  refreshKnowledgeButton: document.querySelector('#refreshKnowledgeButton'),
-  exportKnowledgeButton: document.querySelector('#exportKnowledgeButton'),
-  importKnowledgeButton: document.querySelector('#importKnowledgeButton'),
-  clearKnowledgeButton: document.querySelector('#clearKnowledgeButton'),
-  knowledgeImportInput: document.querySelector('#knowledgeImportInput'),
-  backgroundStatus: document.querySelector('#backgroundStatus'),
-  knowledgeCount: document.querySelector('#knowledgeCount'),
-  chunkCount: document.querySelector('#chunkCount'),
-  knowledgeList: document.querySelector('#knowledgeList'),
-  promptInput: document.querySelector('#promptInput'),
-  generateButton: document.querySelector('#generateButton'),
-  clearButton: document.querySelector('#clearButton'),
-  clearConsoleButton: document.querySelector('#clearConsoleButton'),
-  samplePromptButton: document.querySelector('#samplePromptButton'),
-  outputArea: document.querySelector('#outputArea'),
-  outputMeta: document.querySelector('#outputMeta'),
-  consoleArea: document.querySelector('#consoleArea'),
-  runtimeSelect: document.querySelector('#runtimeSelect'),
-  temperatureInput: document.querySelector('#temperatureInput'),
-  temperatureValue: document.querySelector('#temperatureValue'),
-  maxTokensInput: document.querySelector('#maxTokensInput'),
-  topKInput: document.querySelector('#topKInput'),
-  modelCheckpointPath: document.querySelector('#modelCheckpointPath'),
-  tokenizerPath: document.querySelector('#tokenizerPath'),
-  checkpointName: document.querySelector('#checkpointName'),
-  checkpointSelect: document.querySelector('#checkpointSelect'),
-  saveCheckpointButton: document.querySelector('#saveCheckpointButton'),
-  loadCheckpointButton: document.querySelector('#loadCheckpointButton'),
-  refreshCheckpointsButton: document.querySelector('#refreshCheckpointsButton'),
-  trainingStatus: document.querySelector('#trainingStatus'),
-  latestTrainLoss: document.querySelector('#latestTrainLoss'),
-  latestValidationLoss: document.querySelector('#latestValidationLoss'),
-  latestCheckpoint: document.querySelector('#latestCheckpoint'),
-  trainBatchSize: document.querySelector('#trainBatchSize'),
-  trainLearningRate: document.querySelector('#trainLearningRate'),
-  trainMaxSteps: document.querySelector('#trainMaxSteps'),
-  trainEvalInterval: document.querySelector('#trainEvalInterval'),
-  trainCheckpointInterval: document.querySelector('#trainCheckpointInterval'),
-  trainDevice: document.querySelector('#trainDevice'),
-  trainResumeCheckpoint: document.querySelector('#trainResumeCheckpoint'),
-  startTrainingButton: document.querySelector('#startTrainingButton'),
-  stopTrainingButton: document.querySelector('#stopTrainingButton'),
-  refreshTrainingButton: document.querySelector('#refreshTrainingButton'),
+  serverStatus: q('#serverStatus'),
+  runtimeStatus: q('#runtimeStatus'),
+  chatHistory: q('#chatHistory'),
+  chatForm: q('#chatForm'),
+  messageInput: q('#messageInput'),
+  sendButton: q('#sendButton'),
+  clearChatButton: q('#clearChatButton'),
+  refreshKnowledgeButton: q('#refreshKnowledgeButton'),
+  exportKnowledgeButton: q('#exportKnowledgeButton'),
+  importKnowledgeButton: q('#importKnowledgeButton'),
+  clearKnowledgeButton: q('#clearKnowledgeButton'),
+  knowledgeImportInput: q('#knowledgeImportInput'),
+  backgroundStatus: q('#backgroundStatus'),
+  knowledgeCount: q('#knowledgeCount'),
+  chunkCount: q('#chunkCount'),
+  knowledgeList: q('#knowledgeList'),
+  promptInput: q('#promptInput'),
+  generateButton: q('#generateButton'),
+  clearButton: q('#clearButton'),
+  clearConsoleButton: q('#clearConsoleButton'),
+  samplePromptButton: q('#samplePromptButton'),
+  outputArea: q('#outputArea'),
+  outputMeta: q('#outputMeta'),
+  consoleArea: q('#consoleArea'),
+  runtimeSelect: q('#runtimeSelect'),
+  temperatureInput: q('#temperatureInput'),
+  temperatureValue: q('#temperatureValue'),
+  maxTokensInput: q('#maxTokensInput'),
+  topKInput: q('#topKInput'),
+  modelCheckpointPath: q('#modelCheckpointPath'),
+  tokenizerPath: q('#tokenizerPath'),
+  checkpointName: q('#checkpointName'),
+  checkpointSelect: q('#checkpointSelect'),
+  saveCheckpointButton: q('#saveCheckpointButton'),
+  loadCheckpointButton: q('#loadCheckpointButton'),
+  refreshCheckpointsButton: q('#refreshCheckpointsButton'),
+  trainingStatus: q('#trainingStatus'),
+  latestTrainLoss: q('#latestTrainLoss'),
+  latestValidationLoss: q('#latestValidationLoss'),
+  latestCheckpoint: q('#latestCheckpoint'),
+  trainBatchSize: q('#trainBatchSize'),
+  trainLearningRate: q('#trainLearningRate'),
+  trainMaxSteps: q('#trainMaxSteps'),
+  trainEvalInterval: q('#trainEvalInterval'),
+  trainCheckpointInterval: q('#trainCheckpointInterval'),
+  trainDevice: q('#trainDevice'),
+  trainResumeCheckpoint: q('#trainResumeCheckpoint'),
+  startTrainingButton: q('#startTrainingButton'),
+  stopTrainingButton: q('#stopTrainingButton'),
+  refreshTrainingButton: q('#refreshTrainingButton'),
 };
 
 const messages = [
   {
     role: 'assistant',
     content:
-      'Hi — I am a local retrieval-and-rules conversation interface. Add files in local_knowledge/ or ask me to search the internet; I save retrieved summaries locally without OpenAI or API keys.',
+      'Hi — I am a local chat and article/webpage interface. Paste a URL to summarize or inspect a page. I only search the wider internet when your prompt includes the exact phrase “search the internet for”.',
     sources: [],
   },
 ];
@@ -63,18 +65,21 @@ const messages = [
 function logConsole(message, level = 'info') {
   const timestamp = new Date().toLocaleTimeString();
   const prefix = level === 'error' ? 'ERROR' : 'INFO';
+  if (!elements.consoleArea) {
+    return;
+  }
   elements.consoleArea.textContent += `\n[${timestamp}] ${prefix}: ${message}`;
   elements.consoleArea.scrollTop = elements.consoleArea.scrollHeight;
 }
 
 function readSettings() {
   return {
-    runtime: elements.runtimeSelect.value,
-    temperature: Number(elements.temperatureInput.value),
-    maxTokens: Number(elements.maxTokensInput.value),
-    topK: Number(elements.topKInput.value),
-    modelCheckpointPath: elements.modelCheckpointPath.value.trim(),
-    tokenizerPath: elements.tokenizerPath.value.trim(),
+    runtime: elements.runtimeSelect?.value || 'demo',
+    temperature: Number(elements.temperatureInput?.value || 0.8),
+    maxTokens: Number(elements.maxTokensInput?.value || 80),
+    topK: Number(elements.topKInput?.value || 50),
+    modelCheckpointPath: elements.modelCheckpointPath?.value.trim() || '',
+    tokenizerPath: elements.tokenizerPath?.value.trim() || '',
   };
 }
 
@@ -131,7 +136,7 @@ async function sendMessage(event) {
   messages.push({ role: 'user', content: message });
   elements.messageInput.value = '';
   elements.sendButton.disabled = true;
-  elements.outputMeta.textContent = /\b(search|internet|web|online|look up|browse)\b/i.test(message) ? 'Searching web…' : 'Searching knowledge…';
+  elements.outputMeta.textContent = /search the internet for/i.test(message) ? 'Searching web…' : (/https?:\/\//i.test(message) ? 'Retrieving page…' : 'Thinking locally…');
   renderMessages();
 
   try {
@@ -155,6 +160,13 @@ async function sendMessage(event) {
 }
 
 function renderKnowledge(data) {
+  if (!elements.knowledgeCount || !elements.knowledgeList) {
+    const background = data.webKnowledge?.background || {};
+    if (elements.backgroundStatus) {
+      elements.backgroundStatus.textContent = `Background ingestion: ${background.enabled ? 'enabled' : 'disabled'}${background.running ? ' • running' : ''}${background.lastRunAt ? ` • last run ${new Date(background.lastRunAt).toLocaleTimeString()}` : ''}`;
+    }
+    return;
+  }
   const documents = data.documents || [];
   const webCount = data.webKnowledge?.items || documents.filter((document) => document.type === 'web-knowledge').length;
   const localCount = documents.filter((document) => document.type !== 'web-knowledge').length;
@@ -272,17 +284,20 @@ function formatLoss(value) {
 
 function readTrainingSettings() {
   return {
-    batchSize: Number(elements.trainBatchSize.value),
-    learningRate: Number(elements.trainLearningRate.value),
-    maxSteps: Number(elements.trainMaxSteps.value),
-    evalInterval: Number(elements.trainEvalInterval.value),
-    checkpointInterval: Number(elements.trainCheckpointInterval.value),
-    device: elements.trainDevice.value,
-    resume: elements.trainResumeCheckpoint.value.trim(),
+    batchSize: Number(elements.trainBatchSize?.value || 8),
+    learningRate: Number(elements.trainLearningRate?.value || 0.0003),
+    maxSteps: Number(elements.trainMaxSteps?.value || 200),
+    evalInterval: Number(elements.trainEvalInterval?.value || 25),
+    checkpointInterval: Number(elements.trainCheckpointInterval?.value || 50),
+    device: elements.trainDevice?.value || 'auto',
+    resume: elements.trainResumeCheckpoint?.value.trim() || '',
   };
 }
 
 function renderTrainingStatus(status) {
+  if (!elements.trainingStatus) {
+    return;
+  }
   elements.trainingStatus.textContent = status.running ? 'Running' : status.status || 'idle';
   elements.latestTrainLoss.textContent = formatLoss(status.latestTrainLoss);
   elements.latestValidationLoss.textContent = formatLoss(status.latestValidationLoss);
@@ -332,7 +347,7 @@ async function loadStatus() {
   try {
     const status = await requestJson('/api/status');
     elements.serverStatus.textContent = status.name;
-    elements.runtimeStatus.textContent = `${status.localKnowledgeFiles} knowledge docs • ${status.webKnowledgeItems || 0} web items • API keys required: ${status.apiKeysRequired ? 'yes' : 'no'}`;
+    elements.runtimeStatus.textContent = `Chat + webpage mode • ${status.webKnowledgeItems || 0} saved web items • API keys required: ${status.apiKeysRequired ? 'yes' : 'no'}`;
     logConsole(`Server ready. Knowledge directory: ${status.knowledgeDirectory}`);
   } catch (error) {
     elements.serverStatus.textContent = 'Server status failed';
@@ -420,7 +435,7 @@ function clearChat() {
   setMessages([
     {
       role: 'assistant',
-      content: 'Conversation memory cleared. Ask a new question and I will search saved local/web knowledge before answering; explicitly ask me to search the internet to retrieve new pages.',
+      content: 'Conversation memory cleared. Ask a normal chat question, paste a URL for article/page help, or use the exact phrase “search the internet for” to retrieve new pages.',
       sources: [],
     },
   ]);
@@ -429,49 +444,61 @@ function clearChat() {
   logConsole('Chat history cleared.');
 }
 
+function on(element, eventName, handler) {
+  if (element) {
+    element.addEventListener(eventName, handler);
+  }
+}
+
 function wireEvents() {
-  elements.temperatureInput.addEventListener('input', () => {
-    elements.temperatureValue.textContent = elements.temperatureInput.value;
+  on(elements.temperatureInput, 'input', () => {
+    if (elements.temperatureValue) {
+      elements.temperatureValue.textContent = elements.temperatureInput.value;
+    }
   });
-  elements.chatForm.addEventListener('submit', sendMessage);
-  elements.messageInput.addEventListener('keydown', (event) => {
+  on(elements.chatForm, 'submit', sendMessage);
+  on(elements.messageInput, 'keydown', (event) => {
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
       elements.chatForm.requestSubmit();
     }
   });
-  elements.generateButton.addEventListener('click', generate);
-  elements.clearButton.addEventListener('click', () => {
+  on(elements.generateButton, 'click', generate);
+  on(elements.clearButton, 'click', () => {
     elements.outputArea.textContent = 'Responses will appear here.';
     elements.outputMeta.textContent = 'Cleared';
     logConsole('Output cleared.');
   });
-  elements.clearChatButton.addEventListener('click', clearChat);
-  elements.refreshKnowledgeButton.addEventListener('click', refreshKnowledge);
-  elements.exportKnowledgeButton.addEventListener('click', exportStoredKnowledge);
-  elements.importKnowledgeButton.addEventListener('click', () => elements.knowledgeImportInput.click());
-  elements.knowledgeImportInput.addEventListener('change', importStoredKnowledgeFile);
-  elements.clearKnowledgeButton.addEventListener('click', clearStoredKnowledge);
-  elements.clearConsoleButton.addEventListener('click', () => {
+  on(elements.clearChatButton, 'click', clearChat);
+  on(elements.refreshKnowledgeButton, 'click', refreshKnowledge);
+  on(elements.exportKnowledgeButton, 'click', exportStoredKnowledge);
+  on(elements.importKnowledgeButton, 'click', () => elements.knowledgeImportInput?.click());
+  on(elements.knowledgeImportInput, 'change', importStoredKnowledgeFile);
+  on(elements.clearKnowledgeButton, 'click', clearStoredKnowledge);
+  on(elements.clearConsoleButton, 'click', () => {
     elements.consoleArea.textContent = 'Console is ready.';
   });
-  elements.samplePromptButton.addEventListener('click', () => {
-    elements.messageInput.value = 'Search the internet for practical programming education resources';
+  on(elements.samplePromptButton, 'click', () => {
+    elements.messageInput.value = 'Summarize https://example.com/ and list names, dates, and numbers mentioned.';
     elements.messageInput.focus();
   });
-  elements.saveCheckpointButton.addEventListener('click', saveCheckpoint);
-  elements.loadCheckpointButton.addEventListener('click', loadCheckpoint);
-  elements.refreshCheckpointsButton.addEventListener('click', refreshCheckpoints);
-  elements.startTrainingButton.addEventListener('click', startTraining);
-  elements.stopTrainingButton.addEventListener('click', stopTraining);
-  elements.refreshTrainingButton.addEventListener('click', refreshTrainingStatus);
+  on(elements.saveCheckpointButton, 'click', saveCheckpoint);
+  on(elements.loadCheckpointButton, 'click', loadCheckpoint);
+  on(elements.refreshCheckpointsButton, 'click', refreshCheckpoints);
+  on(elements.startTrainingButton, 'click', startTraining);
+  on(elements.stopTrainingButton, 'click', stopTraining);
+  on(elements.refreshTrainingButton, 'click', refreshTrainingStatus);
 }
 
 renderMessages();
 wireEvents();
 loadStatus();
 refreshKnowledge();
-refreshCheckpoints().catch((error) => logConsole(error.message, 'error'));
-refreshTrainingStatus();
-setInterval(refreshTrainingStatus, 5000);
+if (elements.checkpointSelect) {
+  refreshCheckpoints().catch((error) => logConsole(error.message, 'error'));
+}
+if (elements.trainingStatus) {
+  refreshTrainingStatus();
+  setInterval(refreshTrainingStatus, 5000);
+}
 setInterval(refreshKnowledge, 15000);
