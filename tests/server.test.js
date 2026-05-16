@@ -40,3 +40,20 @@ test('fallback is helpful without dumping recent user messages', () => {
   assert.doesNotMatch(response, /Hello \| What is 20\+5 \| How are you/i);
   assert.match(response, /basic conversation, arithmetic/i);
 });
+
+test('detects explicit internet search requests without requiring paid services', () => {
+  const { extractSearchQuery } = require('../server');
+
+  assert.equal(extractSearchQuery('Search the internet for local-first RAG patterns'), 'local-first RAG patterns');
+  assert.equal(extractSearchQuery('Tell me a joke'), '');
+});
+
+test('detects explicit user-provided knowledge for persistent memory', () => {
+  const { extractUserProvidedKnowledge } = require('../server');
+
+  assert.equal(
+    extractUserProvidedKnowledge('Remember this: retrieval memory simulates learning without retraining model weights.'),
+    'retrieval memory simulates learning without retraining model weights.',
+  );
+  assert.equal(extractUserProvidedKnowledge('Can you remember what I asked?'), '');
+});

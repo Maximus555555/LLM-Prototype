@@ -8,6 +8,8 @@ const PUBLIC_DIR = path.join(ROOT, 'public');
 const CHECKPOINT_DIR = path.join(ROOT, 'checkpoints');
 const KNOWLEDGE_DIR = path.join(ROOT, 'local_knowledge');
 const TRAINING_DATA_DIR = path.join(ROOT, 'local_training_data');
+const DATA_DIR = path.join(ROOT, 'data');
+const WEB_KNOWLEDGE_PATH = path.join(DATA_DIR, 'web_knowledge.json');
 const PORT = Number(process.env.PORT || 3000);
 
 const MIME_TYPES = {
@@ -29,7 +31,38 @@ const STOP_WORDS = new Set([
 fs.mkdirSync(CHECKPOINT_DIR, { recursive: true });
 fs.mkdirSync(KNOWLEDGE_DIR, { recursive: true });
 fs.mkdirSync(TRAINING_DATA_DIR, { recursive: true });
+fs.mkdirSync(DATA_DIR, { recursive: true });
 
+const WEB_SEARCH_MAX_RESULTS = 5;
+const WEB_FETCH_TIMEOUT_MS = 12_000;
+const BACKGROUND_INGEST_INTERVAL_MS = Number(process.env.BACKGROUND_INGEST_INTERVAL_MS || 90_000);
+const BACKGROUND_INGESTION_ENABLED = process.env.DISABLE_BACKGROUND_INGESTION !== '1';
+const BACKGROUND_TOPICS = [
+  'computer science education programming tutorial',
+  'open educational resources science technology',
+  'software engineering best practices guide',
+  'public domain science education article',
+  'technical writing programming concepts explained',
+  'mathematics education algorithm explanation',
+];
+
+const webKnowledgeState = {
+  items: [],
+  loadedAt: null,
+  savedAt: null,
+  background: {
+    enabled: BACKGROUND_INGESTION_ENABLED,
+    running: false,
+    lastRunAt: null,
+    lastSavedUrl: null,
+    lastError: null,
+    searchesRun: 0,
+    itemsSaved: 0,
+  },
+};
+
+let activeChatResponses = 0;
+let backgroundTimer = null;
 
 const trainingState = {
   process: null,
@@ -174,6 +207,432 @@ function uniqueTokens(text) {
   return new Set(tokenize(text));
 }
 
+
+function stableHash(text) {
+  let hash = 2166136261;
+  for (const char of String(text || '')) {
+    hash ^= char.charCodeAt(0);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16).padStart(8, '0');
+}
+
+function normalizeUrl(url) {
+  try {
+    const parsed = new URL(String(url || '').trim());
+    parsed.hash = '';
+    for (const key of ['utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content']) {
+      parsed.searchParams.delete(key);
+    }
+    return parsed.toString();
+  } catch (_error) {
+    return '';
+  }
+}
+
+function loadWebKnowledge() {
+  if (!fs.existsSync(WEB_KNOWLEDGE_PATH)) {
+    webKnowledgeState.items = [];
+    webKnowledgeState.loadedAt = new Date().toISOString();
+    return webKnowledgeState;
+  }
+  try {
+    const parsed = JSON.parse(fs.readFileSync(WEB_KNOWLEDGE_PATH, 'utf-8'));
+    webKnowledgeState.items = Array.isArray(parsed.items) ? parsed.items : [];
+    webKnowledgeState.loadedAt = parsed.loadedAt || new Date().toISOString();
+    webKnowledgeState.savedAt = parsed.savedAt || null;
+  } catch (error) {
+    webKnowledgeState.items = [];
+    webKnowledgeState.loadedAt = new Date().toISOString();
+    webKnowledgeState.background.lastError = `Could not load web knowledge: ${error.message}`;
+  }
+  return webKnowledgeState;
+}
+
+function saveWebKnowledge() {
+  webKnowledgeState.savedAt = new Date().toISOString();
+  fs.writeFileSync(WEB_KNOWLEDGE_PATH, `${JSON.stringify({
+    version: 1,
+    loadedAt: webKnowledgeState.loadedAt,
+    savedAt: webKnowledgeState.savedAt,
+    items: webKnowledgeState.items,
+  }, null, 2)}\n`, 'utf-8');
+}
+
+function exportWebKnowledge() {
+  return {
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    source: 'LLM-Prototype local web knowledge export',
+    items: webKnowledgeState.items,
+  };
+}
+
+function importWebKnowledge(payload) {
+  const imported = Array.isArray(payload?.items) ? payload.items : Array.isArray(payload) ? payload : [];
+  let added = 0;
+  for (const rawItem of imported) {
+    const item = {
+      url: normalizeUrl(rawItem.url),
+      title: String(rawItem.title || 'Imported knowledge').slice(0, 240),
+      dateSaved: rawItem.dateSaved || new Date().toISOString(),
+      summary: String(rawItem.summary || '').slice(0, 3000),
+      keywords: Array.isArray(rawItem.keywords) ? rawItem.keywords.slice(0, 20).map(String) : extractKeywords(`${rawItem.title || ''} ${rawItem.summary || ''}`),
+      text: String(rawItem.text || rawItem.content || '').slice(0, 12_000),
+      sourceType: rawItem.sourceType || 'import',
+    };
+    if (!item.url && !item.summary && !item.text) {
+      continue;
+    }
+    if (storeWebKnowledgeItem(item).saved) {
+      added += 1;
+    }
+  }
+  saveWebKnowledge();
+  return { added, total: webKnowledgeState.items.length };
+}
+
+function keywordSimilarity(a, b) {
+  const left = new Set(a || []);
+  const right = new Set(b || []);
+  if (!left.size || !right.size) {
+    return 0;
+  }
+  let overlap = 0;
+  for (const token of left) {
+    if (right.has(token)) {
+      overlap += 1;
+    }
+  }
+  return overlap / (left.size + right.size - overlap);
+}
+
+function extractKeywords(text, limit = 12) {
+  const counts = new Map();
+  for (const token of tokenize(text)) {
+    if (token.length < 3) {
+      continue;
+    }
+    counts.set(token, (counts.get(token) || 0) + 1);
+  }
+  return [...counts.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .slice(0, limit)
+    .map(([token]) => token);
+}
+
+function summarizeText(text, title = '') {
+  const cleaned = String(text || '')
+    .replace(/\s+/g, ' ')
+    .replace(/[\u0000-\u001f]+/g, ' ')
+    .trim();
+  if (!cleaned) {
+    return '';
+  }
+  const sentences = cleaned.match(/[^.!?]+[.!?]+|[^.!?]+$/g)?.map((sentence) => sentence.trim()).filter((sentence) => sentence.length > 40) || [];
+  const keywords = extractKeywords(`${title} ${cleaned}`, 16);
+  const scored = sentences.slice(0, 80).map((sentence, index) => {
+    const tokens = uniqueTokens(sentence);
+    let score = Math.max(0, 8 - index * 0.12);
+    for (const keyword of keywords) {
+      if (tokens.has(keyword)) {
+        score += 2;
+      }
+    }
+    return { sentence, score };
+  });
+  const selected = scored
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 4)
+    .sort((a, b) => cleaned.indexOf(a.sentence) - cleaned.indexOf(b.sentence))
+    .map((item) => item.sentence);
+  return (selected.length ? selected.join(' ') : cleaned.slice(0, 700)).slice(0, 1400);
+}
+
+function stripHtmlToText(html) {
+  return String(html || '')
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<nav[\s\S]*?<\/nav>/gi, ' ')
+    .replace(/<footer[\s\S]*?<\/footer>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;|&apos;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function extractHtmlTitle(html, fallback = '') {
+  const title = String(html || '').match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] || fallback;
+  return stripHtmlToText(title).slice(0, 240) || fallback || 'Untitled webpage';
+}
+
+async function fetchWithTimeout(url, options = {}) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), options.timeoutMs || WEB_FETCH_TIMEOUT_MS);
+  try {
+    return await fetch(url, {
+      signal: controller.signal,
+      headers: {
+        'User-Agent': 'LLM-Prototype/0.1 local educational knowledge retriever',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,application/json;q=0.8,text/plain;q=0.7,*/*;q=0.5',
+        ...(options.headers || {}),
+      },
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function searchDuckDuckGo(query, limit = WEB_SEARCH_MAX_RESULTS) {
+  const endpoint = `https://duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
+  const response = await fetchWithTimeout(endpoint);
+  if (!response.ok) {
+    throw new Error(`DuckDuckGo search failed with HTTP ${response.status}`);
+  }
+  const html = await response.text();
+  const results = [];
+  const resultRegex = /<a[^>]+class="result__a"[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>[\s\S]*?<a[^>]+class="result__snippet"[^>]*>([\s\S]*?)<\/a>/gi;
+  let match;
+  while ((match = resultRegex.exec(html)) && results.length < limit) {
+    let url = match[1].replace(/&amp;/g, '&');
+    try {
+      const parsed = new URL(url, 'https://duckduckgo.com');
+      if (parsed.searchParams.has('uddg')) {
+        url = parsed.searchParams.get('uddg');
+      }
+    } catch (_error) {
+      continue;
+    }
+    const normalized = normalizeUrl(url);
+    if (!normalized || !/^https?:\/\//i.test(normalized)) {
+      continue;
+    }
+    results.push({
+      title: stripHtmlToText(match[2]),
+      url: normalized,
+      snippet: stripHtmlToText(match[3]),
+      engine: 'duckduckgo-html',
+    });
+  }
+  return results;
+}
+
+async function searchWikipedia(query, limit = WEB_SEARCH_MAX_RESULTS) {
+  const endpoint = `https://en.wikipedia.org/w/api.php?action=opensearch&namespace=0&limit=${limit}&format=json&search=${encodeURIComponent(query)}`;
+  const response = await fetchWithTimeout(endpoint, { headers: { Accept: 'application/json' } });
+  if (!response.ok) {
+    throw new Error(`Wikipedia search failed with HTTP ${response.status}`);
+  }
+  const [term, titles, descriptions, urls] = await response.json();
+  return (titles || []).map((title, index) => ({
+    title,
+    url: normalizeUrl(urls[index]),
+    snippet: descriptions[index] || `Wikipedia result for ${term}.`,
+    engine: 'wikipedia-opensearch',
+  })).filter((result) => result.url).slice(0, limit);
+}
+
+async function webSearch(query, limit = WEB_SEARCH_MAX_RESULTS) {
+  const normalizedQuery = String(query || '').trim();
+  if (!normalizedQuery) {
+    return [];
+  }
+  try {
+    const results = await searchDuckDuckGo(normalizedQuery, limit);
+    if (results.length) {
+      return results;
+    }
+  } catch (error) {
+    webKnowledgeState.background.lastError = error.message;
+  }
+  try {
+    return await searchWikipedia(normalizedQuery, limit);
+  } catch (error) {
+    webKnowledgeState.background.lastError = error.message;
+    return [];
+  }
+}
+
+async function retrieveWebpageText(url) {
+  const normalizedUrl = normalizeUrl(url);
+  if (!normalizedUrl) {
+    throw new Error('A valid http(s) URL is required.');
+  }
+  const response = await fetchWithTimeout(normalizedUrl);
+  if (!response.ok) {
+    throw new Error(`Could not retrieve webpage: HTTP ${response.status}`);
+  }
+  const contentType = response.headers.get('content-type') || '';
+  const body = await response.text();
+  const title = contentType.includes('html') ? extractHtmlTitle(body, normalizedUrl) : normalizedUrl;
+  const text = contentType.includes('html') ? stripHtmlToText(body) : body.replace(/\s+/g, ' ').trim();
+  return { url: normalizedUrl, title, text: text.slice(0, 60_000), contentType };
+}
+
+function storeWebKnowledgeItem(rawItem) {
+  const text = String(rawItem.text || rawItem.summary || '').trim();
+  const summary = String(rawItem.summary || summarizeText(text, rawItem.title)).trim();
+  const keywords = Array.isArray(rawItem.keywords) && rawItem.keywords.length ? rawItem.keywords.slice(0, 20) : extractKeywords(`${rawItem.title || ''} ${summary} ${text}`, 12);
+  const normalizedUrl = normalizeUrl(rawItem.url) || `local-import:${stableHash(`${rawItem.title || ''}${summary}${text}`)}`;
+  const contentHash = stableHash(`${normalizedUrl}\n${summary}\n${text.slice(0, 5000)}`);
+  const duplicate = webKnowledgeState.items.find((item) => item.url === normalizedUrl || item.contentHash === contentHash || keywordSimilarity(item.keywords, keywords) > 0.92 && item.title === rawItem.title);
+  if (duplicate) {
+    return { saved: false, reason: 'duplicate', item: duplicate };
+  }
+  const item = {
+    id: contentHash,
+    url: normalizedUrl,
+    title: String(rawItem.title || 'Untitled webpage').slice(0, 240),
+    dateSaved: rawItem.dateSaved || new Date().toISOString(),
+    summary: summary.slice(0, 1800),
+    keywords,
+    text: text.slice(0, 12_000),
+    sourceType: rawItem.sourceType || 'web',
+    contentHash,
+  };
+  webKnowledgeState.items.unshift(item);
+  webKnowledgeState.items = webKnowledgeState.items.slice(0, 500);
+  saveWebKnowledge();
+  webKnowledgeState.background.itemsSaved += 1;
+  webKnowledgeState.background.lastSavedUrl = item.url;
+  return { saved: true, item };
+}
+
+async function retrieveSummarizeAndStore(url, fallback = {}) {
+  const page = await retrieveWebpageText(url);
+  const summary = summarizeText(page.text, page.title);
+  const keywords = extractKeywords(`${page.title} ${summary} ${page.text}`, 12);
+  return storeWebKnowledgeItem({
+    url: page.url,
+    title: page.title || fallback.title,
+    text: page.text,
+    summary,
+    keywords,
+    sourceType: fallback.sourceType || 'webpage',
+  });
+}
+
+function searchStoredWebKnowledge(query, limit = 5) {
+  const queryTokens = uniqueTokens(query);
+  if (!queryTokens.size) {
+    return [];
+  }
+  return webKnowledgeState.items
+    .map((item) => {
+      const itemTokens = uniqueTokens(`${item.title} ${item.summary} ${(item.keywords || []).join(' ')} ${item.text || ''}`);
+      let overlap = 0;
+      for (const token of queryTokens) {
+        if (itemTokens.has(token)) {
+          overlap += 1;
+        }
+      }
+      const score = overlap + overlap / Math.max(1, Math.sqrt(itemTokens.size));
+      return {
+        source: item.url,
+        title: item.title,
+        chunk: 1,
+        content: item.summary || String(item.text || '').slice(0, 1200),
+        score: Number(score.toFixed(3)),
+        dateSaved: item.dateSaved,
+        keywords: item.keywords || [],
+        type: 'web-knowledge',
+      };
+    })
+    .filter((match) => match.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit);
+}
+
+function extractSearchQuery(message) {
+  const text = String(message || '').trim();
+  const explicit = /\b(search|look up|browse|internet|web|online|google|duckduckgo|find current|latest)\b/i.test(text);
+  if (!explicit) {
+    return '';
+  }
+  return text
+    .replace(/^\s*(please\s+)?(search|look up|browse|find)\s+(the\s+)?(internet|web|online)?\s*(for|about)?\s*/i, '')
+    .replace(/\b(on the internet|online|on the web)\b/ig, '')
+    .trim() || text;
+}
+
+async function answerWithInternetSearch(message, memory) {
+  const query = extractSearchQuery(message);
+  const results = await webSearch(query, WEB_SEARCH_MAX_RESULTS);
+  const stored = [];
+  for (const result of results.slice(0, 3)) {
+    try {
+      const saved = await retrieveSummarizeAndStore(result.url, { title: result.title, sourceType: 'web-search' });
+      stored.push(saved.item);
+    } catch (_error) {
+      const saved = storeWebKnowledgeItem({
+        url: result.url,
+        title: result.title,
+        text: result.snippet,
+        summary: result.snippet,
+        keywords: extractKeywords(`${result.title} ${result.snippet}`),
+        sourceType: 'search-result-snippet',
+      });
+      stored.push(saved.item);
+    }
+  }
+  const retrieved = searchStoredWebKnowledge(`${query} ${message}`, 5);
+  const snippets = retrieved.slice(0, 4).map((match, index) => `${index + 1}. ${match.title || match.source}: ${match.content}`);
+  return {
+    answer: [
+      `I searched the web for “${query}” using no-key, free sources, retrieved/summarized available pages, and saved useful knowledge locally in data/web_knowledge.json.`,
+      snippets.length ? snippets.join('\n\n') : 'I found search results but could not extract enough readable text to summarize confidently.',
+      `Sources: ${retrieved.map((match) => match.source).join(', ') || results.map((result) => result.url).join(', ') || 'none'}.`,
+      'This is retrieval-based local memory, not model retraining.',
+    ].join('\n\n'),
+    memory,
+    sources: retrieved,
+    documents: loadKnowledgeBase().documents,
+    webResults: results,
+    saved: stored.length,
+  };
+}
+
+async function runBackgroundIngestion() {
+  if (!BACKGROUND_INGESTION_ENABLED || webKnowledgeState.background.running || activeChatResponses > 0) {
+    return;
+  }
+  webKnowledgeState.background.running = true;
+  webKnowledgeState.background.lastRunAt = new Date().toISOString();
+  webKnowledgeState.background.lastError = null;
+  try {
+    const topic = BACKGROUND_TOPICS[webKnowledgeState.background.searchesRun % BACKGROUND_TOPICS.length];
+    webKnowledgeState.background.searchesRun += 1;
+    const results = await webSearch(topic, 3);
+    const candidate = results.find((result) => !webKnowledgeState.items.some((item) => item.url === result.url));
+    if (candidate) {
+      await retrieveSummarizeAndStore(candidate.url, { title: candidate.title, sourceType: 'background-web' });
+    }
+  } catch (error) {
+    webKnowledgeState.background.lastError = error.message;
+  } finally {
+    webKnowledgeState.background.running = false;
+  }
+}
+
+function startBackgroundIngestion() {
+  if (!BACKGROUND_INGESTION_ENABLED || backgroundTimer) {
+    return;
+  }
+  backgroundTimer = setInterval(() => {
+    runBackgroundIngestion().catch((error) => {
+      webKnowledgeState.background.lastError = error.message;
+      webKnowledgeState.background.running = false;
+    });
+  }, BACKGROUND_INGEST_INTERVAL_MS);
+  backgroundTimer.unref?.();
+  setTimeout(() => runBackgroundIngestion().catch(() => {}), 5_000).unref?.();
+}
+
 function walkKnowledgeFiles(directory = KNOWLEDGE_DIR) {
   if (!fs.existsSync(directory)) {
     return [];
@@ -231,11 +690,35 @@ function loadKnowledgeBase() {
     const source = toRelativeKnowledgePath(filePath);
     const content = fs.readFileSync(filePath, 'utf-8');
     const fileChunks = chunkText(content, source);
-    documents.push({ source, characters: content.length, chunks: fileChunks.length });
+    documents.push({ source, characters: content.length, chunks: fileChunks.length, type: 'local-file' });
     chunks.push(...fileChunks);
+  }
+
+  for (const item of webKnowledgeState.items) {
+    const source = item.url;
+    const content = [item.title, item.summary, item.text].filter(Boolean).join('\n\n');
+    const itemChunks = chunkText(content, source).map((chunk) => ({
+      ...chunk,
+      title: item.title,
+      dateSaved: item.dateSaved,
+      keywords: item.keywords || [],
+      type: 'web-knowledge',
+    }));
+    documents.push({
+      source,
+      title: item.title,
+      characters: content.length,
+      chunks: itemChunks.length,
+      dateSaved: item.dateSaved,
+      keywords: item.keywords || [],
+      type: 'web-knowledge',
+    });
+    chunks.push(...itemChunks);
   }
   return { documents, chunks, loadedAt: new Date().toISOString() };
 }
+
+loadWebKnowledge();
 
 function searchKnowledge(query, limit = 5) {
   const knowledgeBase = loadKnowledgeBase();
@@ -414,7 +897,7 @@ function answerBasicConversation(message, memory, documentCount) {
     return [
       'I can handle basic conversation, arithmetic, short explanations, and simple follow-up context in this chat.',
       `I can also search ${documentCount} local knowledge file(s) for project-specific answers.`,
-      'For facts outside those files, I will stay cautious instead of pretending I know more than I do.',
+      'For facts outside those files, explicitly ask me to search the internet and I can retrieve, summarize, and save webpages locally.',
     ].join(' ');
   }
 
@@ -435,7 +918,7 @@ function createFallback(message, memory) {
   const topic = tokenize(message).slice(0, 6).join(', ') || 'that topic';
   const followUp = memory.recentUserTopics.length > 1
     ? 'If this is a follow-up, add one more detail and I will connect it to the current chat context.'
-    : 'You can ask conversational questions, basic math, or questions about files in local_knowledge/.';
+    : 'You can ask conversational questions, basic math, questions about stored knowledge, or explicitly ask me to search the internet.';
   return [
     `I am not fully sure how to answer ${topic} from the local knowledge I have right now.`,
     'I can still help with basic conversation, arithmetic, and project questions grounded in local files.',
@@ -520,6 +1003,47 @@ function createLocalChatResponse({ message, history }) {
     sources: search.matches,
     documents: search.documents,
   };
+}
+
+
+
+function extractUserProvidedKnowledge(message) {
+  const text = String(message || '').trim();
+  const match = text.match(/^(?:please\s+)?(?:remember|save|learn|store)\s+(?:this|that|the following)?[:\s]+([\s\S]{20,})$/i);
+  return match ? match[1].trim() : '';
+}
+
+async function createLocalChatResponseAsync({ message, history }) {
+  const normalizedMessage = String(message || '').trim();
+  const memory = summarizeMemory(history);
+  const userKnowledge = extractUserProvidedKnowledge(normalizedMessage);
+  if (userKnowledge) {
+    const saved = storeWebKnowledgeItem({
+      url: `user-provided:${stableHash(userKnowledge)}`,
+      title: 'User-provided knowledge',
+      text: userKnowledge,
+      summary: summarizeText(userKnowledge, 'User-provided knowledge') || userKnowledge,
+      keywords: extractKeywords(userKnowledge),
+      sourceType: 'user-provided',
+    });
+    const search = searchKnowledge(userKnowledge, 4);
+    return {
+      answer: `${saved.saved ? 'Saved' : 'Already had'} that user-provided knowledge in the persistent local knowledge database. I will use retrieval over saved knowledge in future conversations; this is persistent memory, not model retraining.`,
+      memory,
+      sources: search.matches,
+      documents: search.documents,
+    };
+  }
+  const query = extractSearchQuery(normalizedMessage);
+  if (query) {
+    activeChatResponses += 1;
+    try {
+      return await answerWithInternetSearch(normalizedMessage, memory);
+    } finally {
+      activeChatResponses = Math.max(0, activeChatResponses - 1);
+    }
+  }
+  return createLocalChatResponse({ message, history });
 }
 
 function demoGenerate(prompt, settings) {
@@ -698,7 +1222,11 @@ async function handleApi(request, response, url) {
       checkpointDirectory: 'checkpoints/',
       trainingDataDirectory: 'local_training_data/',
       knowledgeDirectory: 'local_knowledge/',
+      webKnowledgePath: 'data/web_knowledge.json',
       localKnowledgeFiles: knowledgeBase.documents.length,
+      webKnowledgeItems: webKnowledgeState.items.length,
+      internetAccess: true,
+      backgroundIngestion: webKnowledgeState.background,
       defaultConfig: 'configs/tiny.json',
       runtimes: ['local-chat', 'demo', 'local-python'],
       trainingSupport: true,
@@ -711,20 +1239,66 @@ async function handleApi(request, response, url) {
     const knowledgeBase = loadKnowledgeBase();
     sendJson(response, 200, {
       directory: 'local_knowledge/',
+      webKnowledgePath: 'data/web_knowledge.json',
       loadedAt: knowledgeBase.loadedAt,
       documents: knowledgeBase.documents,
       chunkCount: knowledgeBase.chunks.length,
+      webKnowledge: {
+        items: webKnowledgeState.items.length,
+        savedAt: webKnowledgeState.savedAt,
+        background: webKnowledgeState.background,
+      },
     });
+    return;
+  }
+
+  if (request.method === 'POST' && url.pathname === '/api/knowledge/search') {
+    const payload = await readRequestJson(request);
+    const matches = searchKnowledge(payload.query || '', clampTrainingInteger(payload.limit, 8, 1, 25)).matches;
+    sendJson(response, 200, { matches, count: matches.length });
+    return;
+  }
+
+  if (request.method === 'POST' && url.pathname === '/api/knowledge/clear') {
+    webKnowledgeState.items = [];
+    saveWebKnowledge();
+    sendJson(response, 200, { cleared: true, total: 0 });
+    return;
+  }
+
+  if (request.method === 'GET' && url.pathname === '/api/knowledge/export') {
+    sendJson(response, 200, exportWebKnowledge());
+    return;
+  }
+
+  if (request.method === 'POST' && url.pathname === '/api/knowledge/import') {
+    const payload = await readRequestJson(request);
+    sendJson(response, 200, importWebKnowledge(payload));
+    return;
+  }
+
+  if (request.method === 'POST' && url.pathname === '/api/internet/search') {
+    const payload = await readRequestJson(request);
+    const query = String(payload.query || '').trim();
+    const results = await webSearch(query, clampTrainingInteger(payload.limit, WEB_SEARCH_MAX_RESULTS, 1, 10));
+    sendJson(response, 200, { query, results });
+    return;
+  }
+
+  if (request.method === 'POST' && url.pathname === '/api/internet/retrieve') {
+    const payload = await readRequestJson(request);
+    const stored = await retrieveSummarizeAndStore(payload.url, { sourceType: 'manual-retrieval' });
+    sendJson(response, 200, stored);
     return;
   }
 
   if (request.method === 'POST' && url.pathname === '/api/chat') {
     const payload = await readRequestJson(request);
-    const result = createLocalChatResponse({ message: payload.message, history: payload.history });
+    const result = await createLocalChatResponseAsync({ message: payload.message, history: payload.history });
     sendJson(response, 200, {
       runtime: 'local-chat',
       ...result,
-      console: 'Answered with local conversation memory and retrieval over local_knowledge/. No external AI service was contacted.',
+      console: 'Answered with local conversation memory, local/web knowledge retrieval, and optional no-key internet search. No external AI service was contacted.',
     });
     return;
   }
@@ -847,13 +1421,18 @@ const server = http.createServer(async (request, response) => {
 
 if (require.main === module) {
   server.listen(PORT, () => {
+    startBackgroundIngestion();
     console.log(`Local conversation prototype running at http://localhost:${PORT}`);
-    console.log('No external AI service is used. Add local text files under local_knowledge/ to expand retrieval.');
+    console.log('No external AI service is used. Add local text files under local_knowledge/ or use optional no-key web retrieval to expand local memory.');
   });
 }
 
 module.exports = {
   createLocalChatResponse,
+  createLocalChatResponseAsync,
+  extractSearchQuery,
+  extractUserProvidedKnowledge,
+  searchStoredWebKnowledge,
   parseMathExpression,
   tryAnswerMath,
   server,

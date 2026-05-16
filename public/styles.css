@@ -460,3 +460,16 @@ button:disabled {
     grid-template-columns: 1fr;
   }
 }
+
+.danger-button {
+  color: #fecaca;
+  border-color: rgba(248, 113, 113, 0.36);
+  background: rgba(127, 29, 29, 0.2);
+}
+
+.background-status {
+  margin: 12px 0 0;
+  color: var(--muted);
+  font-size: 0.86rem;
+  line-height: 1.45;
+}

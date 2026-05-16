@@ -7,6 +7,11 @@ const elements = {
   sendButton: document.querySelector('#sendButton'),
   clearChatButton: document.querySelector('#clearChatButton'),
   refreshKnowledgeButton: document.querySelector('#refreshKnowledgeButton'),
+  exportKnowledgeButton: document.querySelector('#exportKnowledgeButton'),
+  importKnowledgeButton: document.querySelector('#importKnowledgeButton'),
+  clearKnowledgeButton: document.querySelector('#clearKnowledgeButton'),
+  knowledgeImportInput: document.querySelector('#knowledgeImportInput'),
+  backgroundStatus: document.querySelector('#backgroundStatus'),
   knowledgeCount: document.querySelector('#knowledgeCount'),
   chunkCount: document.querySelector('#chunkCount'),
   knowledgeList: document.querySelector('#knowledgeList'),
@@ -49,7 +54,7 @@ const messages = [
   {
     role: 'assistant',
     content:
-      'Hi — I am a local retrieval-and-rules conversation interface. Add or edit files in local_knowledge/, then ask me questions. I do not call external AI services.',
+      'Hi — I am a local retrieval-and-rules conversation interface. Add files in local_knowledge/ or ask me to search the internet; I save retrieved summaries locally without OpenAI or API keys.',
     sources: [],
   },
 ];
@@ -125,7 +130,7 @@ async function sendMessage(event) {
   messages.push({ role: 'user', content: message });
   elements.messageInput.value = '';
   elements.sendButton.disabled = true;
-  elements.outputMeta.textContent = 'Searching local files…';
+  elements.outputMeta.textContent = /\b(search|internet|web|online|look up|browse)\b/i.test(message) ? 'Searching web…' : 'Searching knowledge…';
   renderMessages();
 
   try {
@@ -135,10 +140,10 @@ async function sendMessage(event) {
     });
     messages.push({ role: 'assistant', content: data.answer, sources: data.sources || [] });
     elements.outputArea.textContent = data.answer;
-    elements.outputMeta.textContent = data.sources?.length ? `${data.sources.length} local match(es)` : 'Fallback';
+    elements.outputMeta.textContent = data.webResults?.length ? `${data.webResults.length} web result(s)` : (data.sources?.length ? `${data.sources.length} knowledge match(es)` : 'Fallback');
     logConsole(data.console || 'Local chat response finished.');
     renderMessages();
-    renderKnowledge({ documents: data.documents || [] });
+    await refreshKnowledge();
   } catch (error) {
     elements.outputMeta.textContent = 'Error';
     logConsole(error.message, 'error');
@@ -150,7 +155,9 @@ async function sendMessage(event) {
 
 function renderKnowledge(data) {
   const documents = data.documents || [];
-  elements.knowledgeCount.textContent = `${documents.length} file${documents.length === 1 ? '' : 's'}`;
+  const webCount = data.webKnowledge?.items || documents.filter((document) => document.type === 'web-knowledge').length;
+  const localCount = documents.filter((document) => document.type !== 'web-knowledge').length;
+  elements.knowledgeCount.textContent = `${localCount} file${localCount === 1 ? '' : 's'} • ${webCount} web item${webCount === 1 ? '' : 's'}`;
   if (typeof data.chunkCount === 'number') {
     elements.chunkCount.textContent = `${data.chunkCount} chunks indexed`;
   } else {
@@ -158,9 +165,14 @@ function renderKnowledge(data) {
     elements.chunkCount.textContent = `${chunks} chunks indexed`;
   }
   elements.knowledgeList.innerHTML = '';
+  if (elements.backgroundStatus) {
+    const background = data.webKnowledge?.background || {};
+    elements.backgroundStatus.textContent = `Background web ingestion: ${background.enabled ? 'enabled' : 'disabled'}${background.running ? ' • running' : ''}${background.lastRunAt ? ` • last run ${new Date(background.lastRunAt).toLocaleTimeString()}` : ''}${background.lastError ? ` • ${background.lastError}` : ''}`;
+  }
   documents.forEach((localDocument) => {
     const item = window.document.createElement('li');
-    item.innerHTML = `<strong>${localDocument.source}</strong><small>${localDocument.chunks} chunk(s) • ${localDocument.characters} characters</small>`;
+    const label = localDocument.type === 'web-knowledge' ? 'web' : 'file';
+    item.innerHTML = `<strong>${localDocument.title || localDocument.source}</strong><small>${label} • ${localDocument.chunks} chunk(s) • ${localDocument.characters} characters${localDocument.dateSaved ? ` • saved ${new Date(localDocument.dateSaved).toLocaleDateString()}` : ''}</small>`;
     elements.knowledgeList.append(item);
   });
   if (!documents.length) {
@@ -174,7 +186,7 @@ async function refreshKnowledge() {
   try {
     const data = await requestJson('/api/knowledge');
     renderKnowledge(data);
-    logConsole(`Loaded ${data.documents.length} local knowledge file(s) from ${data.directory}.`);
+    logConsole(`Loaded ${data.documents.length} knowledge document(s) from ${data.directory} and ${data.webKnowledgePath}.`);
   } catch (error) {
     logConsole(error.message, 'error');
   }
@@ -201,6 +213,57 @@ async function refreshCheckpoints() {
   });
 }
 
+
+
+async function clearStoredKnowledge() {
+  if (!window.confirm('Clear saved web knowledge from data/web_knowledge.json? Local files in local_knowledge/ will not be deleted.')) {
+    return;
+  }
+  try {
+    const data = await requestJson('/api/knowledge/clear', { method: 'POST', body: JSON.stringify({}) });
+    logConsole(`Cleared saved web knowledge. ${data.total} web item(s) remain.`);
+    await refreshKnowledge();
+  } catch (error) {
+    logConsole(error.message, 'error');
+  }
+}
+
+async function exportStoredKnowledge() {
+  try {
+    const data = await requestJson('/api/knowledge/export');
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = `web-knowledge-${new Date().toISOString().slice(0, 10)}.json`;
+    document.body.append(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(link.href);
+    logConsole(`Exported ${data.items?.length || 0} saved web knowledge item(s).`);
+  } catch (error) {
+    logConsole(error.message, 'error');
+  }
+}
+
+async function importStoredKnowledgeFile(event) {
+  const file = event.target.files?.[0];
+  if (!file) {
+    return;
+  }
+  try {
+    const payload = JSON.parse(await file.text());
+    const data = await requestJson('/api/knowledge/import', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+    logConsole(`Imported ${data.added} web knowledge item(s). ${data.total} total saved.`);
+    await refreshKnowledge();
+  } catch (error) {
+    logConsole(error.message, 'error');
+  } finally {
+    event.target.value = '';
+  }
+}
 
 function formatLoss(value) {
   return Number.isFinite(value) ? value.toFixed(4) : '—';
@@ -267,7 +330,7 @@ async function loadStatus() {
   try {
     const status = await requestJson('/api/status');
     elements.serverStatus.textContent = status.name;
-    elements.runtimeStatus.textContent = `${status.localKnowledgeFiles} local files • API keys required: ${status.apiKeysRequired ? 'yes' : 'no'}`;
+    elements.runtimeStatus.textContent = `${status.localKnowledgeFiles} knowledge docs • ${status.webKnowledgeItems || 0} web items • API keys required: ${status.apiKeysRequired ? 'yes' : 'no'}`;
     logConsole(`Server ready. Knowledge directory: ${status.knowledgeDirectory}`);
   } catch (error) {
     elements.serverStatus.textContent = 'Server status failed';
@@ -355,7 +418,7 @@ function clearChat() {
   setMessages([
     {
       role: 'assistant',
-      content: 'Conversation memory cleared. Ask a new question and I will search local_knowledge/ before answering.',
+      content: 'Conversation memory cleared. Ask a new question and I will search saved local/web knowledge before answering; explicitly ask me to search the internet to retrieve new pages.',
       sources: [],
     },
   ]);
@@ -383,11 +446,15 @@ function wireEvents() {
   });
   elements.clearChatButton.addEventListener('click', clearChat);
   elements.refreshKnowledgeButton.addEventListener('click', refreshKnowledge);
+  elements.exportKnowledgeButton.addEventListener('click', exportStoredKnowledge);
+  elements.importKnowledgeButton.addEventListener('click', () => elements.knowledgeImportInput.click());
+  elements.knowledgeImportInput.addEventListener('change', importStoredKnowledgeFile);
+  elements.clearKnowledgeButton.addEventListener('click', clearStoredKnowledge);
   elements.clearConsoleButton.addEventListener('click', () => {
     elements.consoleArea.textContent = 'Console is ready.';
   });
   elements.samplePromptButton.addEventListener('click', () => {
-    elements.messageInput.value = 'What can this local prototype answer using its bundled knowledge files?';
+    elements.messageInput.value = 'Search the internet for practical programming education resources';
     elements.messageInput.focus();
   });
   elements.saveCheckpointButton.addEventListener('click', saveCheckpoint);
@@ -405,3 +472,4 @@ refreshKnowledge();
 refreshCheckpoints().catch((error) => logConsole(error.message, 'error'));
 refreshTrainingStatus();
 setInterval(refreshTrainingStatus, 5000);
+setInterval(refreshKnowledge, 15000);
