@@ -1,6 +1,6 @@
 # LLM-Prototype
 
-A local, educational large-language-model prototype implemented from scratch with PyTorch building blocks. It does **not** call OpenAI or any external AI service and does **not** require an API key.
+A local, educational large-language-model prototype implemented from scratch with PyTorch building blocks and a browser-based local conversation interface. It does **not** call OpenAI or any external AI service, does **not** require an API key, and does **not** add paid services.
 
 ## Quick start in Codespaces
 
@@ -13,35 +13,53 @@ npm start
 
 The app starts a local browser interface at `http://localhost:3000`. GitHub Codespaces will forward port `3000` and open the interface automatically when possible.
 
-## Browser interface
+## Local conversation interface
 
 The included web app provides:
 
-- Clean main app interface for local LLM experiments.
-- Text input box for prompts.
-- Generate button.
-- Output/response area.
-- Model settings panel.
-- Temperature setting.
-- Max tokens setting.
-- Clear output button.
-- Console/error display.
-- Save/load interface checkpoint controls.
-- Optional fields for local model checkpoint and tokenizer paths.
+- Chat-style message history.
+- User message input box.
+- Send button.
+- AI response area for the latest local response.
+- Basic memory within the current conversation.
+- A local knowledge folder at `local_knowledge/`.
+- A simple ingestion system that loads `.txt`, `.md`, and `.json` files from `local_knowledge/` recursively.
+- A retrieval system that searches local content before responding.
+- Fallback responses when the local files do not contain enough matching information.
+- A local-only design: no OpenAI calls, no external AI service calls, no API keys, and no paid service dependencies.
 
-The default **Interface demo** runtime is intentionally dependency-free so the interface can be used immediately with `npm start`. It returns local placeholder text and never contacts an external AI service.
+The default chat experience is a **local retrieval-and-rules assistant**, not a hosted trained LLM. It uses current browser chat history, local file search, and response templates to feel conversational while staying transparent about its limits.
 
-If Python and PyTorch are installed, choose **Local Python transformer** in the Runtime selector to call the repository's bundled untrained transformer through `llm_prototype.inference`. Because training is not included here, untrained model output is random and only useful for smoke testing the code path.
+## Feeding local content into the app
+
+Add generated or local-only content to the `local_knowledge/` folder. Supported file extensions are:
+
+- `.txt`
+- `.md`
+- `.json`
+
+When you click **Refresh knowledge** or send a new chat message, the Node server reads the folder, chunks the files, tokenizes the chunks, ranks matches against the user message, and includes local source paths in the response.
+
+Do not scrape the internet for this app. If you want more content, manually create or copy local/generated notes into `local_knowledge/`.
+
+## Optional local model generator
+
+The interface keeps the existing local generator tools available in a secondary panel:
+
+- **Interface demo**: dependency-free deterministic local placeholder output.
+- **Local Python transformer**: calls the repository's bundled transformer through `llm_prototype.inference` when Python and PyTorch are installed.
+
+Because no trained weights are included, the bundled transformer is not a knowledgeable conversational model by default. Its output is random unless you supply locally trained checkpoints. For useful conversation, use the local chat and retrieval system.
 
 ## Project structure
 
 ```text
-.devcontainer/
-  devcontainer.json          # Codespace setup and port forwarding
 configs/
   tiny.json                  # Example model-size/settings file
 examples/
   generate.py                # Minimal local generation example
+local_knowledge/
+  *.md, *.txt, *.json        # Local files ingested by the chat retrieval system
 public/
   index.html                 # Browser interface markup
   styles.css                 # Browser interface styles

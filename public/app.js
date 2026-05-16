@@ -1,6 +1,15 @@
 const elements = {
   serverStatus: document.querySelector('#serverStatus'),
   runtimeStatus: document.querySelector('#runtimeStatus'),
+  chatHistory: document.querySelector('#chatHistory'),
+  chatForm: document.querySelector('#chatForm'),
+  messageInput: document.querySelector('#messageInput'),
+  sendButton: document.querySelector('#sendButton'),
+  clearChatButton: document.querySelector('#clearChatButton'),
+  refreshKnowledgeButton: document.querySelector('#refreshKnowledgeButton'),
+  knowledgeCount: document.querySelector('#knowledgeCount'),
+  chunkCount: document.querySelector('#chunkCount'),
+  knowledgeList: document.querySelector('#knowledgeList'),
   promptInput: document.querySelector('#promptInput'),
   generateButton: document.querySelector('#generateButton'),
   clearButton: document.querySelector('#clearButton'),
@@ -21,6 +30,15 @@ const elements = {
   saveCheckpointButton: document.querySelector('#saveCheckpointButton'),
   loadCheckpointButton: document.querySelector('#loadCheckpointButton'),
 };
+
+const messages = [
+  {
+    role: 'assistant',
+    content:
+      'Hi — I am a local retrieval-and-rules conversation interface. Add or edit files in local_knowledge/, then ask me questions. I do not call external AI services.',
+    sources: [],
+  },
+];
 
 function logConsole(message, level = 'info') {
   const timestamp = new Date().toLocaleTimeString();
@@ -52,18 +70,114 @@ async function requestJson(url, options = {}) {
   return data;
 }
 
+function renderMessages() {
+  elements.chatHistory.innerHTML = '';
+  messages.forEach((message) => {
+    const article = document.createElement('article');
+    article.className = `chat-message ${message.role}`;
+
+    const label = document.createElement('strong');
+    label.textContent = message.role === 'user' ? 'You' : 'Local AI';
+
+    const body = document.createElement('p');
+    body.textContent = message.content;
+
+    article.append(label, body);
+
+    if (message.sources?.length) {
+      const sources = document.createElement('div');
+      sources.className = 'source-list';
+      sources.textContent = `Sources: ${message.sources.map((source) => `${source.source}#chunk-${source.chunk}`).join(', ')}`;
+      article.append(sources);
+    }
+
+    elements.chatHistory.append(article);
+  });
+  elements.chatHistory.scrollTop = elements.chatHistory.scrollHeight;
+}
+
+function setMessages(nextMessages) {
+  messages.splice(0, messages.length, ...nextMessages);
+  renderMessages();
+}
+
+async function sendMessage(event) {
+  event.preventDefault();
+  const message = elements.messageInput.value.trim();
+  if (!message) {
+    return;
+  }
+
+  messages.push({ role: 'user', content: message });
+  elements.messageInput.value = '';
+  elements.sendButton.disabled = true;
+  elements.outputMeta.textContent = 'Searching local files…';
+  renderMessages();
+
+  try {
+    const data = await requestJson('/api/chat', {
+      method: 'POST',
+      body: JSON.stringify({ message, history: messages.slice(-12) }),
+    });
+    messages.push({ role: 'assistant', content: data.answer, sources: data.sources || [] });
+    elements.outputArea.textContent = data.answer;
+    elements.outputMeta.textContent = data.sources?.length ? `${data.sources.length} local match(es)` : 'Fallback';
+    logConsole(data.console || 'Local chat response finished.');
+    renderMessages();
+    renderKnowledge({ documents: data.documents || [] });
+  } catch (error) {
+    elements.outputMeta.textContent = 'Error';
+    logConsole(error.message, 'error');
+  } finally {
+    elements.sendButton.disabled = false;
+    elements.messageInput.focus();
+  }
+}
+
+function renderKnowledge(data) {
+  const documents = data.documents || [];
+  elements.knowledgeCount.textContent = `${documents.length} file${documents.length === 1 ? '' : 's'}`;
+  if (typeof data.chunkCount === 'number') {
+    elements.chunkCount.textContent = `${data.chunkCount} chunks indexed`;
+  } else {
+    const chunks = documents.reduce((total, document) => total + (document.chunks || 0), 0);
+    elements.chunkCount.textContent = `${chunks} chunks indexed`;
+  }
+  elements.knowledgeList.innerHTML = '';
+  documents.forEach((localDocument) => {
+    const item = window.document.createElement('li');
+    item.innerHTML = `<strong>${localDocument.source}</strong><small>${localDocument.chunks} chunk(s) • ${localDocument.characters} characters</small>`;
+    elements.knowledgeList.append(item);
+  });
+  if (!documents.length) {
+    const item = window.document.createElement('li');
+    item.textContent = 'No local knowledge files found yet.';
+    elements.knowledgeList.append(item);
+  }
+}
+
+async function refreshKnowledge() {
+  try {
+    const data = await requestJson('/api/knowledge');
+    renderKnowledge(data);
+    logConsole(`Loaded ${data.documents.length} local knowledge file(s) from ${data.directory}.`);
+  } catch (error) {
+    logConsole(error.message, 'error');
+  }
+}
+
 async function refreshCheckpoints() {
   const data = await requestJson('/api/checkpoints');
   elements.checkpointSelect.innerHTML = '';
   if (!data.checkpoints.length) {
-    const option = document.createElement('option');
+    const option = window.document.createElement('option');
     option.textContent = 'No checkpoints saved yet';
     option.value = '';
     elements.checkpointSelect.append(option);
     return;
   }
   data.checkpoints.forEach((checkpoint) => {
-    const option = document.createElement('option');
+    const option = window.document.createElement('option');
     option.value = checkpoint;
     option.textContent = checkpoint;
     elements.checkpointSelect.append(option);
@@ -74,8 +188,8 @@ async function loadStatus() {
   try {
     const status = await requestJson('/api/status');
     elements.serverStatus.textContent = status.name;
-    elements.runtimeStatus.textContent = `${status.runtimes.length} runtimes • API keys required: ${status.apiKeysRequired ? 'yes' : 'no'}`;
-    logConsole(`Server ready. Checkpoints directory: ${status.checkpointDirectory}`);
+    elements.runtimeStatus.textContent = `${status.localKnowledgeFiles} local files • API keys required: ${status.apiKeysRequired ? 'yes' : 'no'}`;
+    logConsole(`Server ready. Knowledge directory: ${status.knowledgeDirectory}`);
   } catch (error) {
     elements.serverStatus.textContent = 'Server status failed';
     elements.runtimeStatus.textContent = error.message;
@@ -110,6 +224,7 @@ async function saveCheckpoint() {
         name: elements.checkpointName.value,
         prompt: elements.promptInput.value,
         output: elements.outputArea.textContent,
+        messages,
         settings: readSettings(),
       }),
     });
@@ -139,6 +254,9 @@ async function loadCheckpoint() {
     elements.topKInput.value = settings.topK || 50;
     elements.modelCheckpointPath.value = settings.modelCheckpointPath || '';
     elements.tokenizerPath.value = settings.tokenizerPath || '';
+    if (Array.isArray(checkpoint.messages) && checkpoint.messages.length) {
+      setMessages(checkpoint.messages);
+    }
     elements.outputMeta.textContent = 'Loaded';
     logConsole(`Loaded checkpoint ${selected}.`);
   } catch (error) {
@@ -146,27 +264,51 @@ async function loadCheckpoint() {
   }
 }
 
+function clearChat() {
+  setMessages([
+    {
+      role: 'assistant',
+      content: 'Conversation memory cleared. Ask a new question and I will search local_knowledge/ before answering.',
+      sources: [],
+    },
+  ]);
+  elements.outputArea.textContent = 'Responses will appear here.';
+  elements.outputMeta.textContent = 'Cleared';
+  logConsole('Chat history cleared.');
+}
+
 function wireEvents() {
   elements.temperatureInput.addEventListener('input', () => {
     elements.temperatureValue.textContent = elements.temperatureInput.value;
   });
+  elements.chatForm.addEventListener('submit', sendMessage);
+  elements.messageInput.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault();
+      elements.chatForm.requestSubmit();
+    }
+  });
   elements.generateButton.addEventListener('click', generate);
   elements.clearButton.addEventListener('click', () => {
-    elements.outputArea.textContent = 'Generated text will appear here.';
+    elements.outputArea.textContent = 'Responses will appear here.';
     elements.outputMeta.textContent = 'Cleared';
     logConsole('Output cleared.');
   });
+  elements.clearChatButton.addEventListener('click', clearChat);
+  elements.refreshKnowledgeButton.addEventListener('click', refreshKnowledge);
   elements.clearConsoleButton.addEventListener('click', () => {
     elements.consoleArea.textContent = 'Console is ready.';
   });
   elements.samplePromptButton.addEventListener('click', () => {
-    elements.promptInput.value = 'Summarize the purpose of this local LLM prototype interface in three bullet points.';
-    elements.promptInput.focus();
+    elements.messageInput.value = 'What can this local prototype answer using its bundled knowledge files?';
+    elements.messageInput.focus();
   });
   elements.saveCheckpointButton.addEventListener('click', saveCheckpoint);
   elements.loadCheckpointButton.addEventListener('click', loadCheckpoint);
 }
 
+renderMessages();
 wireEvents();
 loadStatus();
+refreshKnowledge();
 refreshCheckpoints().catch((error) => logConsole(error.message, 'error'));

@@ -6,6 +6,7 @@ const { spawn } = require('node:child_process');
 const ROOT = __dirname;
 const PUBLIC_DIR = path.join(ROOT, 'public');
 const CHECKPOINT_DIR = path.join(ROOT, 'checkpoints');
+const KNOWLEDGE_DIR = path.join(ROOT, 'local_knowledge');
 const PORT = Number(process.env.PORT || 3000);
 
 const MIME_TYPES = {
@@ -16,7 +17,15 @@ const MIME_TYPES = {
   '.svg': 'image/svg+xml; charset=utf-8',
 };
 
+const KNOWLEDGE_EXTENSIONS = new Set(['.txt', '.md', '.json']);
+const STOP_WORDS = new Set([
+  'a', 'an', 'and', 'are', 'as', 'at', 'be', 'but', 'by', 'can', 'do', 'for', 'from', 'has', 'have', 'how', 'i', 'if', 'in',
+  'is', 'it', 'me', 'my', 'of', 'on', 'or', 'our', 'so', 'that', 'the', 'their', 'this', 'to', 'was', 'we', 'what', 'when',
+  'where', 'which', 'who', 'why', 'with', 'you', 'your', 'about', 'into', 'does', 'not', 'no', 'yes', 'than', 'then', 'there',
+]);
+
 fs.mkdirSync(CHECKPOINT_DIR, { recursive: true });
+fs.mkdirSync(KNOWLEDGE_DIR, { recursive: true });
 
 function sendJson(response, statusCode, payload) {
   const body = JSON.stringify(payload, null, 2);
@@ -78,6 +87,188 @@ function clampNumber(value, fallback, min, max) {
     return fallback;
   }
   return Math.min(Math.max(number, min), max);
+}
+
+function tokenize(text) {
+  return String(text || '')
+    .toLowerCase()
+    .match(/[a-z0-9][a-z0-9'-]*/g)
+    ?.filter((token) => token.length > 1 && !STOP_WORDS.has(token)) || [];
+}
+
+function uniqueTokens(text) {
+  return new Set(tokenize(text));
+}
+
+function walkKnowledgeFiles(directory = KNOWLEDGE_DIR) {
+  if (!fs.existsSync(directory)) {
+    return [];
+  }
+  const entries = fs.readdirSync(directory, { withFileTypes: true });
+  const files = [];
+  for (const entry of entries) {
+    const fullPath = path.join(directory, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...walkKnowledgeFiles(fullPath));
+    } else if (entry.isFile() && KNOWLEDGE_EXTENSIONS.has(path.extname(entry.name).toLowerCase())) {
+      files.push(fullPath);
+    }
+  }
+  return files.sort();
+}
+
+function toRelativeKnowledgePath(filePath) {
+  return path.relative(ROOT, filePath).split(path.sep).join('/');
+}
+
+function chunkText(text, source) {
+  const normalized = String(text || '')
+    .replace(/\r\n/g, '\n')
+    .replace(/[\t ]+/g, ' ')
+    .trim();
+  const paragraphs = normalized.split(/\n{2,}/).map((part) => part.trim()).filter(Boolean);
+  const chunks = [];
+  let current = '';
+  for (const paragraph of paragraphs.length ? paragraphs : [normalized]) {
+    const next = current ? `${current}\n\n${paragraph}` : paragraph;
+    if (next.length > 900 && current) {
+      chunks.push(current);
+      current = paragraph;
+    } else {
+      current = next;
+    }
+  }
+  if (current) {
+    chunks.push(current);
+  }
+  return chunks.map((content, index) => ({
+    source,
+    chunk: index + 1,
+    content: content.length > 1400 ? `${content.slice(0, 1400)}…` : content,
+    tokens: uniqueTokens(content),
+  }));
+}
+
+function loadKnowledgeBase() {
+  const files = walkKnowledgeFiles();
+  const documents = [];
+  const chunks = [];
+  for (const filePath of files) {
+    const source = toRelativeKnowledgePath(filePath);
+    const content = fs.readFileSync(filePath, 'utf-8');
+    const fileChunks = chunkText(content, source);
+    documents.push({ source, characters: content.length, chunks: fileChunks.length });
+    chunks.push(...fileChunks);
+  }
+  return { documents, chunks, loadedAt: new Date().toISOString() };
+}
+
+function searchKnowledge(query, limit = 5) {
+  const knowledgeBase = loadKnowledgeBase();
+  const queryTokens = uniqueTokens(query);
+  if (!queryTokens.size) {
+    return { ...knowledgeBase, matches: [] };
+  }
+
+  const matches = knowledgeBase.chunks
+    .map((chunk) => {
+      let overlap = 0;
+      for (const token of queryTokens) {
+        if (chunk.tokens.has(token)) {
+          overlap += 1;
+        }
+      }
+      const density = overlap / Math.max(1, Math.sqrt(chunk.tokens.size));
+      return { source: chunk.source, chunk: chunk.chunk, content: chunk.content, score: overlap + density };
+    })
+    .filter((match) => match.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit)
+    .map((match) => ({ ...match, score: Number(match.score.toFixed(3)) }));
+
+  return { ...knowledgeBase, matches };
+}
+
+function summarizeMemory(history) {
+  const recent = Array.isArray(history) ? history.slice(-8) : [];
+  const userTurns = recent.filter((message) => message && message.role === 'user').map((message) => String(message.content || '').trim()).filter(Boolean);
+  const assistantTurns = recent.filter((message) => message && message.role === 'assistant').map((message) => String(message.content || '').trim()).filter(Boolean);
+  return {
+    turns: recent.length,
+    recentUserTopics: userTurns.slice(-3),
+    lastAssistantNote: assistantTurns.at(-1) || '',
+  };
+}
+
+function createFallback(message, memory) {
+  const topic = tokenize(message).slice(0, 6).join(', ') || 'that topic';
+  const memoryLine = memory.recentUserTopics.length
+    ? ` I remember you recently asked about: ${memory.recentUserTopics.join(' | ')}.`
+    : '';
+  return [
+    `I do not have a confident local-knowledge match for ${topic}.`,
+    'I am a local retrieval-and-rules chat interface, not a trained hosted LLM, so I should not invent facts.',
+    `${memoryLine} Try asking about the files listed in the Local knowledge panel, or add more .txt/.md/.json files under local_knowledge/ and ask again.`,
+  ].join(' ');
+}
+
+function createLocalChatResponse({ message, history }) {
+  const normalizedMessage = String(message || '').trim();
+  const memory = summarizeMemory(history);
+  const search = searchKnowledge(normalizedMessage, 4);
+  const lowerMessage = normalizedMessage.toLowerCase();
+
+  if (!normalizedMessage) {
+    return {
+      answer: 'Type a message and I will search the local knowledge folder before responding.',
+      memory,
+      sources: [],
+      documents: search.documents,
+    };
+  }
+
+  if (/\b(hello|hi|hey|start|help)\b/.test(lowerMessage)) {
+    return {
+      answer: [
+        'Hi — I am running fully locally. I can chat using current-conversation memory and search local text files before answering.',
+        `Right now I loaded ${search.documents.length} local knowledge file(s) from local_knowledge/.`,
+        'Ask about the prototype, the bundled model pieces, local-only rules, or add more text files to local_knowledge/ and refresh.',
+      ].join('\n\n'),
+      memory,
+      sources: [],
+      documents: search.documents,
+    };
+  }
+
+  if (!search.matches.length || search.matches[0].score < 1.2) {
+    return {
+      answer: createFallback(normalizedMessage, memory),
+      memory,
+      sources: [],
+      documents: search.documents,
+    };
+  }
+
+  const snippets = search.matches.slice(0, 3).map((match, index) => {
+    const compact = match.content.replace(/\n+/g, ' ').replace(/\s+/g, ' ').trim();
+    return `${index + 1}. ${compact}`;
+  });
+  const sourceList = search.matches.map((match) => `${match.source}#chunk-${match.chunk}`);
+  const memoryNote = memory.recentUserTopics.length
+    ? `\n\nConversation memory: I am keeping this turn connected to your recent topic(s): ${memory.recentUserTopics.join(' | ')}.`
+    : '';
+
+  return {
+    answer: [
+      'I searched the local knowledge folder and found relevant material. Based only on those local files:',
+      snippets.join('\n\n'),
+      `\nSources searched for this reply: ${sourceList.join(', ')}.`,
+      'If you want more detail, ask a follow-up and I will reuse the chat history plus the local retrieval results.',
+    ].join('\n\n') + memoryNote,
+    memory,
+    sources: search.matches,
+    documents: search.documents,
+  };
 }
 
 function demoGenerate(prompt, settings) {
@@ -166,14 +357,39 @@ function runPythonGeneration({ prompt, temperature, maxTokens, topK, checkpointP
 
 async function handleApi(request, response, url) {
   if (request.method === 'GET' && url.pathname === '/api/status') {
+    const knowledgeBase = loadKnowledgeBase();
     sendJson(response, 200, {
-      name: 'LLM Prototype Interface',
+      name: 'Local Conversation Prototype',
       externalAiServices: false,
       apiKeysRequired: false,
       checkpointSupport: true,
       checkpointDirectory: 'checkpoints/',
+      knowledgeDirectory: 'local_knowledge/',
+      localKnowledgeFiles: knowledgeBase.documents.length,
       defaultConfig: 'configs/tiny.json',
-      runtimes: ['demo', 'local-python'],
+      runtimes: ['local-chat', 'demo', 'local-python'],
+    });
+    return;
+  }
+
+  if (request.method === 'GET' && url.pathname === '/api/knowledge') {
+    const knowledgeBase = loadKnowledgeBase();
+    sendJson(response, 200, {
+      directory: 'local_knowledge/',
+      loadedAt: knowledgeBase.loadedAt,
+      documents: knowledgeBase.documents,
+      chunkCount: knowledgeBase.chunks.length,
+    });
+    return;
+  }
+
+  if (request.method === 'POST' && url.pathname === '/api/chat') {
+    const payload = await readRequestJson(request);
+    const result = createLocalChatResponse({ message: payload.message, history: payload.history });
+    sendJson(response, 200, {
+      runtime: 'local-chat',
+      ...result,
+      console: 'Answered with local conversation memory and retrieval over local_knowledge/. No external AI service was contacted.',
     });
     return;
   }
@@ -226,8 +442,9 @@ async function handleApi(request, response, url) {
       type: 'interface-session',
       prompt: String(payload.prompt || ''),
       output: String(payload.output || ''),
+      messages: Array.isArray(payload.messages) ? payload.messages : [],
       settings: payload.settings || {},
-      note: 'UI checkpoint for prompts, output, and generation controls. Model tensor checkpoints remain supported by src/llm_prototype/model.py.',
+      note: 'UI checkpoint for local chat messages, prompts, output, and generation controls. Model tensor checkpoints remain supported by src/llm_prototype/model.py.',
     };
     fs.writeFileSync(targetPath, `${JSON.stringify(checkpoint, null, 2)}\n`, 'utf-8');
     sendJson(response, 200, { saved: path.basename(targetPath), checkpoint });
@@ -269,7 +486,7 @@ function serveStatic(request, response, url) {
 }
 
 const server = http.createServer(async (request, response) => {
-  const url = new URL(request.url || '/', `http://${request.headers.host || 'localhost'}`);
+  const url = new URL(request.url, `http://${request.headers.host || 'localhost'}`);
   try {
     if (url.pathname.startsWith('/api/')) {
       await handleApi(request, response, url);
@@ -281,7 +498,7 @@ const server = http.createServer(async (request, response) => {
   }
 });
 
-server.listen(PORT, '0.0.0.0', () => {
-  console.log(`LLM Prototype interface running at http://localhost:${PORT}`);
-  console.log('No API keys or external AI services are required.');
+server.listen(PORT, () => {
+  console.log(`Local conversation prototype running at http://localhost:${PORT}`);
+  console.log('No external AI service is used. Add local text files under local_knowledge/ to expand retrieval.');
 });
