@@ -7,6 +7,7 @@ const ROOT = __dirname;
 const PUBLIC_DIR = path.join(ROOT, 'public');
 const CHECKPOINT_DIR = path.join(ROOT, 'checkpoints');
 const KNOWLEDGE_DIR = path.join(ROOT, 'local_knowledge');
+const TRAINING_DATA_DIR = path.join(ROOT, 'local_training_data');
 const PORT = Number(process.env.PORT || 3000);
 
 const MIME_TYPES = {
@@ -18,6 +19,7 @@ const MIME_TYPES = {
 };
 
 const KNOWLEDGE_EXTENSIONS = new Set(['.txt', '.md', '.json']);
+const CHECKPOINT_EXTENSIONS = new Set(['.json', '.pt']);
 const STOP_WORDS = new Set([
   'a', 'an', 'and', 'are', 'as', 'at', 'be', 'but', 'by', 'can', 'do', 'for', 'from', 'has', 'have', 'how', 'i', 'if', 'in',
   'is', 'it', 'me', 'my', 'of', 'on', 'or', 'our', 'so', 'that', 'the', 'their', 'this', 'to', 'was', 'we', 'what', 'when',
@@ -26,6 +28,78 @@ const STOP_WORDS = new Set([
 
 fs.mkdirSync(CHECKPOINT_DIR, { recursive: true });
 fs.mkdirSync(KNOWLEDGE_DIR, { recursive: true });
+fs.mkdirSync(TRAINING_DATA_DIR, { recursive: true });
+
+
+const trainingState = {
+  process: null,
+  startedAt: null,
+  stoppedAt: null,
+  exitCode: null,
+  status: 'idle',
+  latestTrainLoss: null,
+  latestValidationLoss: null,
+  latestStep: null,
+  latestCheckpoint: null,
+  console: '',
+};
+
+function appendTrainingConsole(message) {
+  const text = String(message || '');
+  if (!text) {
+    return;
+  }
+  trainingState.console = `${trainingState.console}${text}`.slice(-20_000);
+  const lossMatch = text.match(/step\s+(\d+):.*?train_loss=([0-9.]+)(?:\s+validation_loss=([0-9.]+))?/);
+  if (lossMatch) {
+    trainingState.latestStep = Number(lossMatch[1]);
+    trainingState.latestTrainLoss = Number(lossMatch[2]);
+    if (lossMatch[3] !== undefined) {
+      trainingState.latestValidationLoss = Number(lossMatch[3]);
+    }
+  }
+  const checkpointMatch = text.match(/latest_checkpoint=([^\s]+)/) || text.match(/saved checkpoint .* and ([^\s]+)/);
+  if (checkpointMatch) {
+    trainingState.latestCheckpoint = checkpointMatch[1];
+  }
+}
+
+function listCheckpoints() {
+  return fs
+    .readdirSync(CHECKPOINT_DIR, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && CHECKPOINT_EXTENSIONS.has(path.extname(entry.name).toLowerCase()))
+    .map((entry) => {
+      const fullPath = path.join(CHECKPOINT_DIR, entry.name);
+      const stats = fs.statSync(fullPath);
+      return {
+        name: entry.name,
+        path: path.relative(ROOT, fullPath).split(path.sep).join('/'),
+        type: entry.name.endsWith('.pt') ? 'model' : 'session',
+        bytes: stats.size,
+        modifiedAt: stats.mtime.toISOString(),
+      };
+    })
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function getTrainingStatus() {
+  return {
+    status: trainingState.status,
+    running: Boolean(trainingState.process),
+    startedAt: trainingState.startedAt,
+    stoppedAt: trainingState.stoppedAt,
+    exitCode: trainingState.exitCode,
+    latestStep: trainingState.latestStep,
+    latestTrainLoss: trainingState.latestTrainLoss,
+    latestValidationLoss: trainingState.latestValidationLoss,
+    latestCheckpoint: trainingState.latestCheckpoint,
+    console: trainingState.console,
+    dataDirectory: 'local_training_data/',
+    checkpointDirectory: 'checkpoints/',
+    hasLatestCheckpoint: fs.existsSync(path.join(CHECKPOINT_DIR, 'latest.pt')),
+    checkpoints: listCheckpoints(),
+  };
+}
 
 function sendJson(response, statusCode, payload) {
   const body = JSON.stringify(payload, null, 2);
@@ -532,6 +606,87 @@ function runPythonGeneration({ prompt, temperature, maxTokens, topK, checkpointP
   });
 }
 
+
+function clampTrainingInteger(value, fallback, min, max) {
+  return Math.round(clampNumber(value, fallback, min, max));
+}
+
+function startTrainingProcess(options = {}) {
+  if (trainingState.process) {
+    throw new Error('Training is already running. Stop it before starting another run.');
+  }
+
+  const args = [
+    'scripts/train.py',
+    '--config', 'configs/tiny.json',
+    '--data-dir', 'local_training_data',
+    '--output-dir', 'checkpoints',
+    '--batch-size', String(clampTrainingInteger(options.batchSize, 8, 1, 64)),
+    '--learning-rate', String(clampNumber(options.learningRate, 0.0003, 0.000001, 0.1)),
+    '--max-steps', String(clampTrainingInteger(options.maxSteps, 200, 1, 100000)),
+    '--eval-interval', String(clampTrainingInteger(options.evalInterval, 25, 1, 10000)),
+    '--checkpoint-interval', String(clampTrainingInteger(options.checkpointInterval, 50, 1, 10000)),
+    '--device', String(options.device || 'auto'),
+  ];
+  if (options.resume) {
+    const resumePath = path.join(ROOT, String(options.resume));
+    if (!resumePath.startsWith(ROOT + path.sep) || !fs.existsSync(resumePath)) {
+      throw new Error('Resume checkpoint must be an existing file in this repository.');
+    }
+    args.push('--resume', String(options.resume));
+  }
+
+  trainingState.startedAt = new Date().toISOString();
+  trainingState.stoppedAt = null;
+  trainingState.exitCode = null;
+  trainingState.status = 'running';
+  trainingState.latestTrainLoss = null;
+  trainingState.latestValidationLoss = null;
+  trainingState.latestStep = null;
+  trainingState.latestCheckpoint = null;
+  trainingState.console = `Starting local training: python3 ${args.join(' ')}\n`;
+
+  const child = spawn(process.env.PYTHON || 'python3', args, {
+    cwd: ROOT,
+    env: { ...process.env, PYTHONPATH: path.join(ROOT, 'src') },
+  });
+  trainingState.process = child;
+
+  child.stdout.on('data', (chunk) => appendTrainingConsole(chunk.toString()));
+  child.stderr.on('data', (chunk) => appendTrainingConsole(chunk.toString()));
+  child.on('error', (error) => {
+    appendTrainingConsole(`\nTraining process error: ${error.message}\n`);
+    trainingState.status = 'error';
+    trainingState.stoppedAt = new Date().toISOString();
+    trainingState.process = null;
+  });
+  child.on('close', (code, signal) => {
+    trainingState.exitCode = code;
+    trainingState.stoppedAt = new Date().toISOString();
+    trainingState.process = null;
+    if (signal) {
+      trainingState.status = 'stopped';
+      appendTrainingConsole(`\nTraining stopped by signal ${signal}.\n`);
+    } else if (code === 0) {
+      trainingState.status = 'completed';
+    } else {
+      trainingState.status = 'error';
+    }
+  });
+
+  return getTrainingStatus();
+}
+
+function stopTrainingProcess() {
+  if (!trainingState.process) {
+    return getTrainingStatus();
+  }
+  appendTrainingConsole('\nStop requested from browser interface.\n');
+  trainingState.status = 'stopping';
+  trainingState.process.kill('SIGTERM');
+  return getTrainingStatus();
+}
+
 async function handleApi(request, response, url) {
   if (request.method === 'GET' && url.pathname === '/api/status') {
     const knowledgeBase = loadKnowledgeBase();
@@ -541,10 +696,13 @@ async function handleApi(request, response, url) {
       apiKeysRequired: false,
       checkpointSupport: true,
       checkpointDirectory: 'checkpoints/',
+      trainingDataDirectory: 'local_training_data/',
       knowledgeDirectory: 'local_knowledge/',
       localKnowledgeFiles: knowledgeBase.documents.length,
       defaultConfig: 'configs/tiny.json',
       runtimes: ['local-chat', 'demo', 'local-python'],
+      trainingSupport: true,
+      hasLatestModelCheckpoint: fs.existsSync(path.join(CHECKPOINT_DIR, 'latest.pt')), 
     });
     return;
   }
@@ -602,12 +760,24 @@ async function handleApi(request, response, url) {
   }
 
   if (request.method === 'GET' && url.pathname === '/api/checkpoints') {
-    const files = fs
-      .readdirSync(CHECKPOINT_DIR, { withFileTypes: true })
-      .filter((entry) => entry.isFile() && entry.name.endsWith('.json'))
-      .map((entry) => entry.name)
-      .sort();
-    sendJson(response, 200, { checkpoints: files });
+    const checkpoints = listCheckpoints();
+    sendJson(response, 200, { checkpoints, names: checkpoints.map((checkpoint) => checkpoint.name) });
+    return;
+  }
+
+  if (request.method === 'GET' && url.pathname === '/api/training/status') {
+    sendJson(response, 200, getTrainingStatus());
+    return;
+  }
+
+  if (request.method === 'POST' && url.pathname === '/api/training/start') {
+    const payload = await readRequestJson(request);
+    sendJson(response, 200, startTrainingProcess(payload));
+    return;
+  }
+
+  if (request.method === 'POST' && url.pathname === '/api/training/stop') {
+    sendJson(response, 200, stopTrainingProcess());
     return;
   }
 
