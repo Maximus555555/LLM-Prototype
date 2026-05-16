@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>LLM Prototype Interface</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="hero panel">
+        <div>
+          <p class="eyebrow">Local LLM Prototype</p>
+          <h1>Prompt, generate, inspect, and checkpoint local experiments.</h1>
+          <p class="hero-copy">
+            This interface is wired for the repository's local transformer code and includes a no-dependency demo runtime.
+            It never contacts OpenAI or external AI services and does not require API keys.
+          </p>
+        </div>
+        <div class="status-card" aria-live="polite">
+          <span class="status-dot"></span>
+          <div>
+            <strong id="serverStatus">Starting interface…</strong>
+            <small id="runtimeStatus">Checking local server status</small>
+          </div>
+        </div>
+      </section>
+
+      <section class="workspace">
+        <section class="panel prompt-panel" aria-labelledby="promptHeading">
+          <div class="section-header">
+            <div>
+              <p class="eyebrow">Prompt</p>
+              <h2 id="promptHeading">Input</h2>
+            </div>
+            <button id="samplePromptButton" class="ghost-button" type="button">Use sample</button>
+          </div>
+          <label class="visually-hidden" for="promptInput">Prompt text</label>
+          <textarea id="promptInput" placeholder="Describe what you want the local prototype to generate…"></textarea>
+          <div class="action-row">
+            <button id="generateButton" class="primary-button" type="button">Generate</button>
+            <button id="clearButton" class="secondary-button" type="button">Clear output</button>
+          </div>
+        </section>
+
+        <aside class="panel settings-panel" aria-labelledby="settingsHeading">
+          <p class="eyebrow">Model</p>
+          <h2 id="settingsHeading">Settings</h2>
+
+          <label for="runtimeSelect">Runtime</label>
+          <select id="runtimeSelect">
+            <option value="demo">Interface demo (no dependencies)</option>
+            <option value="local-python">Local Python transformer</option>
+          </select>
+
+          <label for="temperatureInput">Temperature <span id="temperatureValue">0.8</span></label>
+          <input id="temperatureInput" type="range" min="0.05" max="2" step="0.05" value="0.8" />
+
+          <label for="maxTokensInput">Max tokens</label>
+          <input id="maxTokensInput" type="number" min="1" max="512" value="80" />
+
+          <label for="topKInput">Top-k</label>
+          <input id="topKInput" type="number" min="1" max="259" value="50" />
+
+          <label for="modelCheckpointPath">Model checkpoint path (optional)</label>
+          <input id="modelCheckpointPath" type="text" placeholder="checkpoints/model.pt" />
+
+          <label for="tokenizerPath">Tokenizer path (optional)</label>
+          <input id="tokenizerPath" type="text" placeholder="tokenizer.json" />
+        </aside>
+      </section>
+
+      <section class="workspace lower-grid">
+        <section class="panel output-panel" aria-labelledby="outputHeading">
+          <div class="section-header">
+            <div>
+              <p class="eyebrow">Response</p>
+              <h2 id="outputHeading">Output area</h2>
+            </div>
+            <span id="outputMeta" class="pill">Waiting</span>
+          </div>
+          <pre id="outputArea" class="output-box">Generated text will appear here.</pre>
+        </section>
+
+        <aside class="panel checkpoint-panel" aria-labelledby="checkpointHeading">
+          <p class="eyebrow">Checkpoints</p>
+          <h2 id="checkpointHeading">Save / load</h2>
+          <p class="panel-copy">
+            Save and load interface sessions locally. The Python model also supports tensor checkpoints through the optional path field above.
+          </p>
+          <label for="checkpointName">Checkpoint name</label>
+          <input id="checkpointName" type="text" value="interface-session" />
+          <div class="action-row stacked">
+            <button id="saveCheckpointButton" class="secondary-button" type="button">Save checkpoint</button>
+            <button id="loadCheckpointButton" class="secondary-button" type="button">Load selected</button>
+          </div>
+          <label for="checkpointSelect">Available checkpoints</label>
+          <select id="checkpointSelect"></select>
+        </aside>
+      </section>
+
+      <section class="panel console-panel" aria-labelledby="consoleHeading">
+        <div class="section-header">
+          <div>
+            <p class="eyebrow">Console</p>
+            <h2 id="consoleHeading">Errors and runtime messages</h2>
+          </div>
+          <button id="clearConsoleButton" class="ghost-button" type="button">Clear console</button>
+        </div>
+        <pre id="consoleArea" class="console-box">Console is ready.</pre>
+      </section>
+    </main>
+
+    <script src="/app.js"></script>
+  </body>
+</html>
