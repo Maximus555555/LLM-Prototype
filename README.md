@@ -4,11 +4,17 @@ A local, educational large-language-model prototype implemented from scratch wit
 
 ## Quick start in Codespaces
 
-After opening the Codespace, the only commands you need are:
+After opening the Codespace, the normal app still runs with:
 
 ```bash
 git pull
 npm start
+```
+
+Local training is a separate feature and runs with:
+
+```bash
+npm run train
 ```
 
 The app starts a local browser interface at `http://localhost:3000`. GitHub Codespaces will forward port `3000` and open the interface automatically when possible.
@@ -52,6 +58,31 @@ The interface keeps the existing local generator tools available in a secondary 
 
 Because no trained weights are included, the bundled transformer is not a knowledgeable conversational model by default. Its output is random unless you supply locally trained checkpoints. For useful conversation, use the local chat and retrieval system.
 
+
+## Local training pipeline
+
+Training is local-only. It does not connect to OpenAI, does not call external AI services, and does not require an API key.
+
+1. Put training files under `local_training_data/`. The trainer loads `.txt`, `.md`, and `.json` files recursively.
+2. Run `npm run train` or use the browser **Training** panel.
+3. The script tokenizes the combined local text with the existing tokenizer, creates train/validation splits, trains the existing transformer for next-token prediction, prints train/validation loss, clips gradients, and saves PyTorch checkpoints under `checkpoints/`.
+4. The latest trained model is saved as `checkpoints/latest.pt`.
+5. In the browser, select `latest.pt` from the checkpoint list to set `checkpoints/latest.pt` as the Local Python transformer checkpoint for generation.
+
+You can configure training from the CLI, for example:
+
+```bash
+PYTHONPATH=src python3 scripts/train.py --batch-size 4 --learning-rate 0.0003 --max-steps 500 --eval-interval 50 --checkpoint-interval 100
+```
+
+Resume from a checkpoint with:
+
+```bash
+PYTHONPATH=src python3 scripts/train.py --resume checkpoints/latest.pt
+```
+
+This training path can improve the tiny local model relative to random weights, but it does **not** create a ChatGPT-quality model and does **not** make the model intelligent. Quality depends on the amount of local data, model size, training time, and available CPU/GPU. If no `checkpoints/latest.pt` exists, the Python transformer should be considered untrained/random.
+
 ## Project structure
 
 ```text
@@ -61,12 +92,16 @@ examples/
   generate.py                # Minimal local generation example
 local_knowledge/
   *.md, *.txt, *.json        # Local files ingested by the chat retrieval system
+local_training_data/
+  *.md, *.txt, *.json        # Local files used by scripts/train.py
 public/
   index.html                 # Browser interface markup
   styles.css                 # Browser interface styles
   app.js                     # Browser interface behavior
 server.js                    # Dependency-free Node server and local API routes
-package.json                 # npm start script
+package.json                 # npm start and npm run train scripts
+scripts/
+  train.py                    # Local next-token training pipeline
 tests/
   test_llm_prototype.py      # Smoke tests for tokenizer/model/checkpoint flow
 src/llm_prototype/
@@ -103,4 +138,4 @@ Run a smoke-test generation with random, untrained weights:
 python -m llm_prototype.inference --config configs/tiny.json --prompt "Hello" --max-new-tokens 20
 ```
 
-Because no training is included here, an untrained model will produce random text. To generate meaningful text, train weights locally in a separate training workflow and save a checkpoint with `TransformerLanguageModel.save_checkpoint(...)`.
+Without a trained checkpoint, the model will produce random text. To use trained local weights, run `npm run train` to create `checkpoints/latest.pt`, or save a checkpoint programmatically with `TransformerLanguageModel.save_checkpoint(...)`.

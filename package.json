@@ -6,7 +6,8 @@
   "type": "commonjs",
   "scripts": {
     "start": "node server.js",
-    "test": "node --test tests/server.test.js && python -m pytest"
+    "test": "node --test tests/server.test.js && python -m pytest",
+    "train": "PYTHONPATH=src python3 scripts/train.py"
   },
   "dependencies": {},
   "engines": {

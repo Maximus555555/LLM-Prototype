@@ -29,6 +29,20 @@ const elements = {
   checkpointSelect: document.querySelector('#checkpointSelect'),
   saveCheckpointButton: document.querySelector('#saveCheckpointButton'),
   loadCheckpointButton: document.querySelector('#loadCheckpointButton'),
+  refreshCheckpointsButton: document.querySelector('#refreshCheckpointsButton'),
+  trainingStatus: document.querySelector('#trainingStatus'),
+  latestTrainLoss: document.querySelector('#latestTrainLoss'),
+  latestValidationLoss: document.querySelector('#latestValidationLoss'),
+  latestCheckpoint: document.querySelector('#latestCheckpoint'),
+  trainBatchSize: document.querySelector('#trainBatchSize'),
+  trainLearningRate: document.querySelector('#trainLearningRate'),
+  trainMaxSteps: document.querySelector('#trainMaxSteps'),
+  trainEvalInterval: document.querySelector('#trainEvalInterval'),
+  trainCheckpointInterval: document.querySelector('#trainCheckpointInterval'),
+  trainResumeCheckpoint: document.querySelector('#trainResumeCheckpoint'),
+  startTrainingButton: document.querySelector('#startTrainingButton'),
+  stopTrainingButton: document.querySelector('#stopTrainingButton'),
+  refreshTrainingButton: document.querySelector('#refreshTrainingButton'),
 };
 
 const messages = [
@@ -168,20 +182,85 @@ async function refreshKnowledge() {
 
 async function refreshCheckpoints() {
   const data = await requestJson('/api/checkpoints');
+  const checkpoints = (data.checkpoints || []).map((checkpoint) => (typeof checkpoint === 'string' ? { name: checkpoint, path: `checkpoints/${checkpoint}`, type: checkpoint.endsWith('.pt') ? 'model' : 'session' } : checkpoint));
   elements.checkpointSelect.innerHTML = '';
-  if (!data.checkpoints.length) {
+  if (!checkpoints.length) {
     const option = window.document.createElement('option');
     option.textContent = 'No checkpoints saved yet';
     option.value = '';
     elements.checkpointSelect.append(option);
     return;
   }
-  data.checkpoints.forEach((checkpoint) => {
+  checkpoints.forEach((checkpoint) => {
     const option = window.document.createElement('option');
-    option.value = checkpoint;
-    option.textContent = checkpoint;
+    option.value = checkpoint.name;
+    option.dataset.path = checkpoint.path || `checkpoints/${checkpoint.name}`;
+    option.dataset.type = checkpoint.type || 'session';
+    option.textContent = `${checkpoint.name} (${checkpoint.type || 'session'})`;
     elements.checkpointSelect.append(option);
   });
+}
+
+
+function formatLoss(value) {
+  return Number.isFinite(value) ? value.toFixed(4) : '—';
+}
+
+function readTrainingSettings() {
+  return {
+    batchSize: Number(elements.trainBatchSize.value),
+    learningRate: Number(elements.trainLearningRate.value),
+    maxSteps: Number(elements.trainMaxSteps.value),
+    evalInterval: Number(elements.trainEvalInterval.value),
+    checkpointInterval: Number(elements.trainCheckpointInterval.value),
+    resume: elements.trainResumeCheckpoint.value.trim(),
+  };
+}
+
+function renderTrainingStatus(status) {
+  elements.trainingStatus.textContent = status.running ? 'Running' : status.status || 'idle';
+  elements.latestTrainLoss.textContent = formatLoss(status.latestTrainLoss);
+  elements.latestValidationLoss.textContent = formatLoss(status.latestValidationLoss);
+  elements.latestCheckpoint.textContent = status.latestCheckpoint || (status.hasLatestCheckpoint ? 'checkpoints/latest.pt' : '—');
+  elements.startTrainingButton.disabled = Boolean(status.running);
+  elements.stopTrainingButton.disabled = !status.running;
+  if (status.console) {
+    elements.consoleArea.textContent = `Console is ready.\n\n--- Training ---\n${status.console}`;
+    elements.consoleArea.scrollTop = elements.consoleArea.scrollHeight;
+  }
+}
+
+async function refreshTrainingStatus() {
+  try {
+    const status = await requestJson('/api/training/status');
+    renderTrainingStatus(status);
+    await refreshCheckpoints();
+  } catch (error) {
+    logConsole(error.message, 'error');
+  }
+}
+
+async function startTraining() {
+  try {
+    const status = await requestJson('/api/training/start', {
+      method: 'POST',
+      body: JSON.stringify(readTrainingSettings()),
+    });
+    renderTrainingStatus(status);
+    logConsole('Started local training. This uses local_training_data/ only and may be slow on CPU.');
+  } catch (error) {
+    logConsole(error.message, 'error');
+  }
+}
+
+async function stopTraining() {
+  try {
+    const status = await requestJson('/api/training/stop', { method: 'POST', body: JSON.stringify({}) });
+    renderTrainingStatus(status);
+    logConsole('Stop requested for local training.');
+  } catch (error) {
+    logConsole(error.message, 'error');
+  }
 }
 
 async function loadStatus() {
@@ -243,6 +322,14 @@ async function loadCheckpoint() {
     return;
   }
   try {
+    const selectedOption = elements.checkpointSelect.selectedOptions[0];
+    if (selectedOption?.dataset.type === 'model' || selected.endsWith('.pt')) {
+      elements.runtimeSelect.value = 'local-python';
+      elements.modelCheckpointPath.value = selectedOption?.dataset.path || `checkpoints/${selected}`;
+      elements.outputMeta.textContent = 'Model checkpoint selected';
+      logConsole(`Selected model checkpoint ${elements.modelCheckpointPath.value} for local Python generation.`);
+      return;
+    }
     const checkpoint = await requestJson(`/api/checkpoints/load/${encodeURIComponent(selected)}`);
     elements.promptInput.value = checkpoint.prompt || '';
     elements.outputArea.textContent = checkpoint.output || '';
@@ -305,6 +392,10 @@ function wireEvents() {
   });
   elements.saveCheckpointButton.addEventListener('click', saveCheckpoint);
   elements.loadCheckpointButton.addEventListener('click', loadCheckpoint);
+  elements.refreshCheckpointsButton.addEventListener('click', refreshCheckpoints);
+  elements.startTrainingButton.addEventListener('click', startTraining);
+  elements.stopTrainingButton.addEventListener('click', stopTraining);
+  elements.refreshTrainingButton.addEventListener('click', refreshTrainingStatus);
 }
 
 renderMessages();
@@ -312,3 +403,5 @@ wireEvents();
 loadStatus();
 refreshKnowledge();
 refreshCheckpoints().catch((error) => logConsole(error.message, 'error'));
+refreshTrainingStatus();
+setInterval(refreshTrainingStatus, 5000);
