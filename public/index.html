@@ -13,8 +13,8 @@
           <p class="eyebrow">Local Conversation Prototype</p>
           <h1>Chat with local files, conversation memory, and retrieval rules.</h1>
           <p class="hero-copy">
-            This app uses generated/local content only. It does not call OpenAI or external AI services, does not require an API key,
-            and does not claim to be a trained hosted LLM. It searches local text files before responding.
+            This app uses local content and optional no-key web retrieval only. It does not call OpenAI or paid AI services, does not require an API key,
+            and does not claim to be a trained hosted LLM. It searches saved local/web knowledge before responding.
           </p>
         </div>
         <div class="status-card" aria-live="polite">
@@ -43,7 +43,7 @@
 
           <form id="chatForm" class="chat-composer">
             <label class="visually-hidden" for="messageInput">Message text</label>
-            <textarea id="messageInput" rows="3" placeholder="Ask about the local prototype, model code, no-API rule, or files in local_knowledge/…"></textarea>
+            <textarea id="messageInput" rows="3" placeholder="Ask about saved knowledge, or say “search the internet for…”"></textarea>
             <button id="sendButton" class="primary-button" type="submit">Send</button>
           </form>
         </section>
@@ -52,13 +52,20 @@
           <p class="eyebrow">Retrieval</p>
           <h2 id="knowledgeHeading">Local knowledge</h2>
           <p class="panel-copy">
-            Drop .txt, .md, or .json files into <code>local_knowledge/</code>. The server ingests them from disk and searches them before each reply.
+            Drop .txt, .md, or .json files into <code>local_knowledge/</code>, or explicitly ask the chat to search the internet. Retrieved webpages are summarized and saved in <code>data/web_knowledge.json</code> for future retrieval.
           </p>
           <div class="knowledge-stats">
             <strong id="knowledgeCount">0 files</strong>
             <small id="chunkCount">0 chunks indexed</small>
           </div>
-          <button id="refreshKnowledgeButton" class="secondary-button full-button" type="button">Refresh knowledge</button>
+          <div class="action-row stacked">
+            <button id="refreshKnowledgeButton" class="secondary-button" type="button">Refresh knowledge</button>
+            <button id="exportKnowledgeButton" class="secondary-button" type="button">Export knowledge</button>
+            <button id="importKnowledgeButton" class="secondary-button" type="button">Import knowledge</button>
+            <button id="clearKnowledgeButton" class="ghost-button danger-button" type="button">Clear web knowledge</button>
+          </div>
+          <input id="knowledgeImportInput" class="visually-hidden" type="file" accept="application/json,.json" />
+          <p id="backgroundStatus" class="background-status">Background web ingestion: checking…</p>
           <ul id="knowledgeList" class="knowledge-list"></ul>
         </aside>
       </section>
