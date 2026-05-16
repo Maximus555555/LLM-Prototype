@@ -1,12 +1,94 @@
-<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="UTF-8">
-  <meta http-equiv="refresh" content="0; url=public/index.html">
-  <title>LLM Prototype</title>
-</head>
-<body>
-  <p>Loading LLM Prototype...</p>
-  <p><a href="public/index.html">Click here if it does not load.</a></p>
-</body>
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Local Conversation Prototype</title>
+    <link rel="stylesheet" href="public/styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="hero panel">
+        <div>
+          <p class="eyebrow">Local Conversation Prototype</p>
+          <h1>Chat locally and work with articles or webpages.</h1>
+          <p class="hero-copy">
+            This app keeps the visible interface focused on normal chat and article/webpage handling. It does not call OpenAI or paid AI services, does not require an API key,
+            and only runs user-triggered web search when the exact phrase “search the internet for” is present.
+          </p>
+        </div>
+        <div class="status-card" aria-live="polite">
+          <span class="status-dot"></span>
+          <div>
+            <strong id="serverStatus">Starting interface…</strong>
+            <small id="runtimeStatus">Checking local server status</small>
+          </div>
+        </div>
+      </section>
+
+      <section class="workspace chat-workspace focused-chat-workspace">
+        <section class="panel chat-panel" aria-labelledby="chatHeading">
+          <div class="section-header">
+            <div>
+              <p class="eyebrow">Conversation</p>
+              <h2 id="chatHeading">Local chat</h2>
+            </div>
+            <div class="action-row compact-actions">
+              <button id="samplePromptButton" class="ghost-button" type="button">Use sample</button>
+              <button id="clearChatButton" class="secondary-button" type="button">Clear chat</button>
+            </div>
+          </div>
+
+          <div id="chatHistory" class="chat-history" aria-live="polite"></div>
+
+          <form id="chatForm" class="chat-composer">
+            <label class="visually-hidden" for="messageInput">Message text</label>
+            <textarea id="messageInput" rows="3" placeholder="Chat normally, paste a URL to summarize a page, or type “search the internet for …” to run a web search."></textarea>
+            <button id="sendButton" class="primary-button" type="submit">Send</button>
+          </form>
+        </section>
+
+        <aside class="panel article-panel" aria-labelledby="articleHeading">
+          <p class="eyebrow">Articles & webpages</p>
+          <h2 id="articleHeading">Summarize or inspect a page</h2>
+          <p class="panel-copy">
+            Paste a URL in chat with a request like <code>summarize https://example.com/article</code> or ask for a specific detail from that URL.
+            Direct URL retrieval is separate from internet search. Web search only runs when your prompt includes the exact phrase <code>search the internet for</code>.
+          </p>
+          <ul class="feature-list">
+            <li>Summaries include a short summary, key points, important details, names/dates/numbers, and source URL.</li>
+            <li>Specific-detail questions search within the retrieved page text and answer from that content.</li>
+            <li>No OpenAI, paid services, or API keys are required.</li>
+          </ul>
+          <p id="backgroundStatus" class="background-status">Background ingestion stays separate from chat search.</p>
+        </aside>
+      </section>
+
+      <section class="workspace lower-grid focused-output-workspace">
+        <section class="panel output-panel" aria-labelledby="outputHeading">
+          <div class="section-header">
+            <div>
+              <p class="eyebrow">AI response area</p>
+              <h2 id="outputHeading">Latest local response</h2>
+            </div>
+            <span id="outputMeta" class="pill">Waiting</span>
+          </div>
+          <pre id="outputArea" class="output-box">Responses will appear here.</pre>
+        </section>
+
+        <section class="panel console-panel" aria-labelledby="consoleHeading">
+          <div class="section-header">
+            <div>
+              <p class="eyebrow">Console</p>
+              <h2 id="consoleHeading">Local runtime messages</h2>
+            </div>
+            <button id="clearConsoleButton" class="ghost-button" type="button">Clear console</button>
+          </div>
+          <pre id="consoleArea" class="console-box">Console is ready.</pre>
+        </section>
+      </section>
+    </main>
+
+    <script src="public/app.js"></script>
+  </body>
 </html>
