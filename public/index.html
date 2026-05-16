@@ -11,10 +11,10 @@
       <section class="hero panel">
         <div>
           <p class="eyebrow">Local Conversation Prototype</p>
-          <h1>Chat with local files, conversation memory, and retrieval rules.</h1>
+          <h1>Chat locally and work with articles or webpages.</h1>
           <p class="hero-copy">
-            This app uses local content and optional no-key web retrieval only. It does not call OpenAI or paid AI services, does not require an API key,
-            and does not claim to be a trained hosted LLM. It searches saved local/web knowledge before responding.
+            This app keeps the visible interface focused on normal chat and article/webpage handling. It does not call OpenAI or paid AI services, does not require an API key,
+            and only runs user-triggered web search when the exact phrase “search the internet for” is present.
           </p>
         </div>
         <div class="status-card" aria-live="polite">
@@ -26,7 +26,7 @@
         </div>
       </section>
 
-      <section class="workspace chat-workspace">
+      <section class="workspace chat-workspace focused-chat-workspace">
         <section class="panel chat-panel" aria-labelledby="chatHeading">
           <div class="section-header">
             <div>
@@ -43,71 +43,28 @@
 
           <form id="chatForm" class="chat-composer">
             <label class="visually-hidden" for="messageInput">Message text</label>
-            <textarea id="messageInput" rows="3" placeholder="Ask about saved knowledge, or say “search the internet for…”"></textarea>
+            <textarea id="messageInput" rows="3" placeholder="Chat normally, paste a URL to summarize a page, or type “search the internet for …” to run a web search."></textarea>
             <button id="sendButton" class="primary-button" type="submit">Send</button>
           </form>
         </section>
 
-        <aside class="panel knowledge-panel" aria-labelledby="knowledgeHeading">
-          <p class="eyebrow">Retrieval</p>
-          <h2 id="knowledgeHeading">Local knowledge</h2>
+        <aside class="panel article-panel" aria-labelledby="articleHeading">
+          <p class="eyebrow">Articles & webpages</p>
+          <h2 id="articleHeading">Summarize or inspect a page</h2>
           <p class="panel-copy">
-            Drop .txt, .md, or .json files into <code>local_knowledge/</code>, or explicitly ask the chat to search the internet. Retrieved webpages are summarized and saved in <code>data/web_knowledge.json</code> for future retrieval.
+            Paste a URL in chat with a request like <code>summarize https://example.com/article</code> or ask for a specific detail from that URL.
+            Direct URL retrieval is separate from internet search. Web search only runs when your prompt includes the exact phrase <code>search the internet for</code>.
           </p>
-          <div class="knowledge-stats">
-            <strong id="knowledgeCount">0 files</strong>
-            <small id="chunkCount">0 chunks indexed</small>
-          </div>
-          <div class="action-row stacked">
-            <button id="refreshKnowledgeButton" class="secondary-button" type="button">Refresh knowledge</button>
-            <button id="exportKnowledgeButton" class="secondary-button" type="button">Export knowledge</button>
-            <button id="importKnowledgeButton" class="secondary-button" type="button">Import knowledge</button>
-            <button id="clearKnowledgeButton" class="ghost-button danger-button" type="button">Clear web knowledge</button>
-          </div>
-          <input id="knowledgeImportInput" class="visually-hidden" type="file" accept="application/json,.json" />
-          <p id="backgroundStatus" class="background-status">Background web ingestion: checking…</p>
-          <ul id="knowledgeList" class="knowledge-list"></ul>
+          <ul class="feature-list">
+            <li>Summaries include a short summary, key points, important details, names/dates/numbers, and source URL.</li>
+            <li>Specific-detail questions search within the retrieved page text and answer from that content.</li>
+            <li>No OpenAI, paid services, or API keys are required.</li>
+          </ul>
+          <p id="backgroundStatus" class="background-status">Background ingestion stays separate from chat search.</p>
         </aside>
       </section>
 
-      <section class="workspace lower-grid">
-        <aside class="panel settings-panel" aria-labelledby="settingsHeading">
-          <p class="eyebrow">Optional local model</p>
-          <h2 id="settingsHeading">Existing generator</h2>
-          <p class="panel-copy">
-            The chat above uses local retrieval/rules. This optional tool keeps the local demo and Python transformer path available; choose checkpoints/latest.pt after local training to use trained weights.
-          </p>
-
-          <label for="promptInput">Prompt</label>
-          <textarea id="promptInput" placeholder="Optional prompt for the existing local generator…"></textarea>
-
-          <label for="runtimeSelect">Runtime</label>
-          <select id="runtimeSelect">
-            <option value="demo">Interface demo (no dependencies)</option>
-            <option value="local-python">Local Python transformer</option>
-          </select>
-
-          <label for="temperatureInput">Temperature <span id="temperatureValue">0.8</span></label>
-          <input id="temperatureInput" type="range" min="0.05" max="2" step="0.05" value="0.8" />
-
-          <label for="maxTokensInput">Max tokens</label>
-          <input id="maxTokensInput" type="number" min="1" max="512" value="80" />
-
-          <label for="topKInput">Top-k</label>
-          <input id="topKInput" type="number" min="1" max="259" value="50" />
-
-          <label for="modelCheckpointPath">Model checkpoint path (optional)</label>
-          <input id="modelCheckpointPath" type="text" placeholder="checkpoints/latest.pt" />
-
-          <label for="tokenizerPath">Tokenizer path (optional)</label>
-          <input id="tokenizerPath" type="text" placeholder="tokenizer.json" />
-
-          <div class="action-row">
-            <button id="generateButton" class="secondary-button" type="button">Run generator</button>
-            <button id="clearButton" class="ghost-button" type="button">Clear output</button>
-          </div>
-        </aside>
-
+      <section class="workspace lower-grid focused-output-workspace">
         <section class="panel output-panel" aria-labelledby="outputHeading">
           <div class="section-header">
             <div>
@@ -118,63 +75,7 @@
           </div>
           <pre id="outputArea" class="output-box">Responses will appear here.</pre>
         </section>
-      </section>
 
-
-      <section class="workspace lower-grid">
-        <aside class="panel training-panel" aria-labelledby="trainingHeading">
-          <p class="eyebrow">Training</p>
-          <h2 id="trainingHeading">Local model training</h2>
-          <p class="panel-copy">
-            Put .txt, .md, or .json files in <code>local_training_data/</code>, then train the existing transformer locally for next-token prediction. Training may be slow on CPU. Better results require more local text, a suitable model size, more training time, and available CPU/GPU.
-          </p>
-          <p class="warning-copy">
-            This does not create a ChatGPT-quality model, does not make the model intelligent, and it is not fully trained unless a checkpoint exists.
-          </p>
-
-          <div class="training-status-grid">
-            <div><span>Status</span><strong id="trainingStatus">Idle</strong></div>
-            <div><span>Latest train loss</span><strong id="latestTrainLoss">—</strong></div>
-            <div><span>Latest validation loss</span><strong id="latestValidationLoss">—</strong></div>
-            <div><span>Latest checkpoint</span><strong id="latestCheckpoint">—</strong></div>
-          </div>
-
-          <div class="training-input-grid">
-            <label for="trainBatchSize">Batch size<input id="trainBatchSize" type="number" min="1" max="64" value="8" /></label>
-            <label for="trainLearningRate">Learning rate<input id="trainLearningRate" type="number" min="0.000001" max="0.1" step="0.000001" value="0.0003" /></label>
-            <label for="trainMaxSteps">Max steps<input id="trainMaxSteps" type="number" min="1" max="100000" value="200" /></label>
-            <label for="trainEvalInterval">Eval interval<input id="trainEvalInterval" type="number" min="1" max="10000" value="25" /></label>
-            <label for="trainCheckpointInterval">Checkpoint interval<input id="trainCheckpointInterval" type="number" min="1" max="10000" value="50" /></label>
-            <label for="trainDevice">Device<select id="trainDevice"><option value="auto">Auto CPU/GPU</option><option value="cpu">CPU</option><option value="cuda">CUDA GPU</option><option value="mps">Apple MPS</option></select></label>
-            <label for="trainResumeCheckpoint">Resume checkpoint<input id="trainResumeCheckpoint" type="text" placeholder="checkpoints/latest.pt" /></label>
-          </div>
-
-          <div class="action-row stacked">
-            <button id="startTrainingButton" class="primary-button" type="button">Start training</button>
-            <button id="stopTrainingButton" class="secondary-button" type="button">Stop training</button>
-          </div>
-          <button id="refreshTrainingButton" class="ghost-button full-button" type="button">Refresh training status</button>
-        </aside>
-
-        <section class="panel checkpoint-panel" aria-labelledby="checkpointHeading">
-          <p class="eyebrow">Checkpoints</p>
-          <h2 id="checkpointHeading">Save / load / select</h2>
-          <p class="panel-copy">
-            Save and load local interface-session JSON checkpoints, or select PyTorch model checkpoints created by training for generation.
-          </p>
-          <label for="checkpointName">Session checkpoint name</label>
-          <input id="checkpointName" type="text" value="interface-session" />
-          <div class="action-row stacked">
-            <button id="saveCheckpointButton" class="secondary-button" type="button">Save session</button>
-            <button id="loadCheckpointButton" class="secondary-button" type="button">Load / use selected</button>
-          </div>
-          <label for="checkpointSelect">Available checkpoints</label>
-          <select id="checkpointSelect"></select>
-          <button id="refreshCheckpointsButton" class="ghost-button full-button" type="button">Refresh checkpoints</button>
-        </section>
-      </section>
-
-      <section class="workspace lower-grid">
         <section class="panel console-panel" aria-labelledby="consoleHeading">
           <div class="section-header">
             <div>

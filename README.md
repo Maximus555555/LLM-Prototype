@@ -1,6 +1,6 @@
 # LLM-Prototype
 
-A local, educational large-language-model prototype implemented from scratch with PyTorch building blocks and a browser-based local conversation interface. It does **not** call OpenAI or paid AI services, does **not** require an API key, and can optionally use free web search/webpage retrieval to build a persistent local retrieval memory.
+A local, educational large-language-model prototype implemented from scratch with PyTorch building blocks and a browser-based local conversation interface. It does **not** call OpenAI or paid AI services, does **not** require an API key, and can use direct webpage/article retrieval plus explicitly triggered free web search to build a persistent local retrieval memory.
 
 ## Quick start in Codespaces
 
@@ -29,8 +29,11 @@ The included web app provides:
 - AI response area for the latest local response.
 - Basic memory within the current conversation.
 - Built-in handling for greetings, conversational check-ins, capability questions, thanks, simple memory prompts, and arithmetic expressions.
-- A local knowledge folder at `local_knowledge/`.
-- Optional no-key web search when a user explicitly asks to search the internet.
+- Direct article/page handling by URL from chat prompts.
+- Article summaries with a short summary, key points, important details, detected names/dates/numbers, and source URL.
+- Specific-detail answers that search within the retrieved article/page text.
+- A hidden-but-supported local knowledge folder at `local_knowledge/`.
+- Optional no-key web search only when a user prompt includes the exact phrase `search the internet for` (case-insensitive).
 - Webpage text retrieval, lightweight extractive summarization, keyword extraction, and duplicate avoidance.
 - Persistent web/user knowledge storage in `data/web_knowledge.json`, automatically reloaded at startup.
 - A background ingestion loop that runs while the chat is idle and slowly adds educational, technical, scientific, programming, and conversational web content.
@@ -48,18 +51,20 @@ Add generated or local-only content to the `local_knowledge/` folder. Supported 
 - `.md`
 - `.json`
 
-When you click **Refresh knowledge** or send a new chat message, the Node server reads the folder and also reloads saved web knowledge from `data/web_knowledge.json`. It chunks, tokenizes, ranks matches against the user message, and includes local paths or source URLs in the response.
+When you send a new chat message, the Node server reads the folder and also reloads saved web knowledge from `data/web_knowledge.json`. It chunks, tokenizes, ranks matches against the user message, and includes local paths or source URLs in the response.
 
-To retrieve internet content, explicitly ask the chat to search the internet, for example `Search the internet for practical programming education resources`. The server uses free/no-key search sources, fetches readable webpage text when possible, creates a lightweight extractive summary, extracts keywords, avoids exact/near duplicates, and saves the result locally. You can also use **Export knowledge**, **Import knowledge**, or **Clear web knowledge** in the retrieval panel. Reopening the browser tab or restarting `npm start` preserves saved web knowledge because it is stored on disk.
+To summarize or inspect one known article/page, paste its URL directly into chat, for example `Summarize https://example.com/article and list names, dates, and numbers mentioned.` For specific details, ask a question with the URL; the server searches within the retrieved page text and answers from that content.
+
+To run a broader internet search, the prompt must include the exact phrase `search the internet for`, for example `Search the internet for practical programming education resources`. Prompts like `look this up`, `find current news about AI`, or `what are the best small local AI models` do not trigger web search unless they include that exact phrase. The server uses free/no-key search sources, fetches readable webpage text when possible, creates a lightweight extractive summary, extracts keywords, avoids exact/near duplicates, and saves the result locally. Reopening the browser tab or restarting `npm start` preserves saved web knowledge because it is stored on disk.
 
 ## Optional local model generator
 
-The interface keeps the existing local generator tools available in a secondary panel:
+The visible browser interface no longer shows the local generator panel, keeping the app focused on chat and article/webpage handling. The underlying local generator tools remain available through the codebase and API routes:
 
 - **Interface demo**: dependency-free deterministic local placeholder output.
 - **Local Python transformer**: calls the repository's bundled transformer through `llm_prototype.inference` when Python and PyTorch are installed.
 
-Because no trained weights are included, the bundled transformer is not a knowledgeable conversational model by default. Its output is random unless you supply locally trained checkpoints. For useful conversation, use the local chat and retrieval system.
+Because no trained weights are included, the bundled transformer is not a knowledgeable conversational model by default. Its output is random unless you supply locally trained checkpoints. For useful conversation, use the local chat, URL article/page handling, and retrieval system.
 
 
 ## Local training pipeline
@@ -71,7 +76,7 @@ Training is local-only. It does not connect to OpenAI, does not call external AI
 3. The script tokenizes the combined local text with the existing tokenizer, creates train/validation splits, trains the existing transformer for next-token prediction, prints train/validation loss, clips gradients, and saves PyTorch checkpoints under `checkpoints/`.
 4. The latest trained model is saved as `checkpoints/latest.pt`, and training automatically resumes from it on future starts unless you pass `--no-auto-resume`.
 5. Background training periodically reloads `local_training_data/` and the local no-key ingestion export at `data/web_knowledge.json`, so new files or newly gathered internet content become part of future training cycles.
-6. In the browser, select `latest.pt` from the checkpoint list to set `checkpoints/latest.pt` as the Local Python transformer checkpoint for generation. If no checkpoint is selected, the local Python generator automatically uses `checkpoints/latest.pt` when it exists.
+6. The visible browser interface does not expose the training/checkpoint panel, but generated checkpoints remain available under `checkpoints/` for the local Python generation code path.
 
 You can configure training from the CLI, for example:
 

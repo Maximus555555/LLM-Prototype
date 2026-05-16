@@ -45,6 +45,10 @@ test('detects explicit internet search requests without requiring paid services'
   const { extractSearchQuery } = require('../server');
 
   assert.equal(extractSearchQuery('Search the internet for local-first RAG patterns'), 'local-first RAG patterns');
+  assert.equal(extractSearchQuery('SEARCH THE INTERNET FOR local-first RAG patterns'), 'local-first RAG patterns');
+  assert.equal(extractSearchQuery('what are the best small local AI models'), '');
+  assert.equal(extractSearchQuery('look this up'), '');
+  assert.equal(extractSearchQuery('find current news about AI'), '');
   assert.equal(extractSearchQuery('Tell me a joke'), '');
 });
 
@@ -56,4 +60,16 @@ test('detects explicit user-provided knowledge for persistent memory', () => {
     'retrieval memory simulates learning without retraining model weights.',
   );
   assert.equal(extractUserProvidedKnowledge('Can you remember what I asked?'), '');
+});
+
+
+test('extracts article URLs and searchable article details', () => {
+  const { extractUrls, findArticleDetails, extractNamesDatesNumbers } = require('../server');
+  const page = {
+    text: 'Jane Doe announced Project Atlas on May 5, 2026. The article says the pilot includes 42 schools and 12,000 students. A separate paragraph discusses unrelated background material.',
+  };
+
+  assert.deepEqual(extractUrls('Summarize https://example.com/article.'), ['https://example.com/article']);
+  assert.match(findArticleDetails(page, 'how many schools are in the pilot')[0], /42 schools/);
+  assert.deepEqual(extractNamesDatesNumbers(page.text).dates, ['May 5, 2026']);
 });

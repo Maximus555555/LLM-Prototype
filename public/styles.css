@@ -139,7 +139,16 @@ h2 {
   grid-template-columns: 420px minmax(0, 1fr);
 }
 
+.focused-chat-workspace {
+  grid-template-columns: minmax(0, 1fr) 420px;
+}
+
+.focused-output-workspace {
+  grid-template-columns: minmax(0, 1fr) 420px;
+}
+
 .chat-panel,
+.article-panel,
 .knowledge-panel,
 .prompt-panel,
 .output-panel,
@@ -311,6 +320,21 @@ button:disabled {
 
 .chat-composer textarea {
   min-height: 74px;
+}
+
+.feature-list {
+  margin: 18px 0;
+  padding-left: 20px;
+  color: var(--muted);
+  line-height: 1.65;
+}
+
+.feature-list li + li {
+  margin-top: 10px;
+}
+
+.article-panel code {
+  overflow-wrap: anywhere;
 }
 
 .output-box {
