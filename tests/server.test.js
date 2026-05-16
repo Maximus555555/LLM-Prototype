@@ -73,3 +73,26 @@ test('extracts article URLs and searchable article details', () => {
   assert.match(findArticleDetails(page, 'how many schools are in the pilot')[0], /42 schools/);
   assert.deepEqual(extractNamesDatesNumbers(page.text).dates, ['May 5, 2026']);
 });
+
+test('GitHub Pages root serves the application shell directly', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const rootIndex = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+
+  assert.match(rootIndex, /<main class="app-shell">/);
+  assert.match(rootIndex, /id="chatForm"/);
+  assert.match(rootIndex, /href="public\/styles\.css"/);
+  assert.match(rootIndex, /src="public\/app\.js"/);
+  assert.doesNotMatch(rootIndex, /http-equiv="refresh"/i);
+});
+
+test('public app uses relative assets for project GitHub Pages paths', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const publicIndex = fs.readFileSync(path.join(__dirname, '..', 'public', 'index.html'), 'utf8');
+
+  assert.match(publicIndex, /href="styles\.css"/);
+  assert.match(publicIndex, /src="app\.js"/);
+  assert.doesNotMatch(publicIndex, /href="\/styles\.css"/);
+  assert.doesNotMatch(publicIndex, /src="\/app\.js"/);
+});

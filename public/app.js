@@ -88,11 +88,35 @@ async function requestJson(url, options = {}) {
     headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
     ...options,
   });
-  const data = await response.json();
+  const contentType = response.headers.get('content-type') || '';
+  const data = contentType.includes('application/json')
+    ? await response.json()
+    : { error: `Request failed with status ${response.status}` };
   if (!response.ok) {
-    throw new Error(data.error || data.console || `Request failed with status ${response.status}`);
+    const error = new Error(data.error || data.console || `Request failed with status ${response.status}`);
+    error.status = response.status;
+    throw error;
   }
   return data;
+}
+
+function isApiUnavailable(error) {
+  return error?.status === 404 || /Failed to fetch|Request failed with status 404|API route not found/i.test(error?.message || '');
+}
+
+function createStaticPreviewResponse(message) {
+  const arithmetic = message.match(/[-+*/(). 0-9]+/g)?.find((part) => /[0-9]/.test(part) && /[+*/-]/.test(part));
+  if (arithmetic && /^[0-9+*\/().\s-]+$/.test(arithmetic)) {
+    try {
+      const value = Function(`"use strict"; return (${arithmetic});`)();
+      if (Number.isFinite(value)) {
+        return `Static GitHub Pages preview: ${arithmetic.trim()} = ${value}. Start the local Node server with npm start for chat, URL retrieval, and knowledge features.`;
+      }
+    } catch (error) {
+      // Fall through to the normal static preview message.
+    }
+  }
+  return 'Static GitHub Pages preview loaded the application shell, but GitHub Pages cannot run the local Node API. Start the project with npm start to use chat responses, article retrieval, saved knowledge, and training features.';
 }
 
 function renderMessages() {
@@ -151,8 +175,17 @@ async function sendMessage(event) {
     renderMessages();
     await refreshKnowledge();
   } catch (error) {
-    elements.outputMeta.textContent = 'Error';
-    logConsole(error.message, 'error');
+    if (isApiUnavailable(error)) {
+      const staticResponse = createStaticPreviewResponse(message);
+      messages.push({ role: 'assistant', content: staticResponse, sources: [] });
+      elements.outputArea.textContent = staticResponse;
+      elements.outputMeta.textContent = 'Static preview';
+      logConsole('Static preview mode: local API is not available on this host.');
+      renderMessages();
+    } else {
+      elements.outputMeta.textContent = 'Error';
+      logConsole(error.message, 'error');
+    }
   } finally {
     elements.sendButton.disabled = false;
     elements.messageInput.focus();
@@ -350,9 +383,15 @@ async function loadStatus() {
     elements.runtimeStatus.textContent = `Chat + webpage mode • ${status.webKnowledgeItems || 0} saved web items • API keys required: ${status.apiKeysRequired ? 'yes' : 'no'}`;
     logConsole(`Server ready. Knowledge directory: ${status.knowledgeDirectory}`);
   } catch (error) {
-    elements.serverStatus.textContent = 'Server status failed';
-    elements.runtimeStatus.textContent = error.message;
-    logConsole(error.message, 'error');
+    if (isApiUnavailable(error)) {
+      elements.serverStatus.textContent = 'Static GitHub Pages preview';
+      elements.runtimeStatus.textContent = 'Interface loaded without the local Node API. Run npm start for the full app.';
+      logConsole('Static preview mode: run npm start locally to enable API-backed chat and retrieval.');
+    } else {
+      elements.serverStatus.textContent = 'Server status failed';
+      elements.runtimeStatus.textContent = error.message;
+      logConsole(error.message, 'error');
+    }
   }
 }
 
