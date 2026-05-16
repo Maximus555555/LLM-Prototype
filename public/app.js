@@ -44,6 +44,7 @@ const elements = {
   trainMaxSteps: document.querySelector('#trainMaxSteps'),
   trainEvalInterval: document.querySelector('#trainEvalInterval'),
   trainCheckpointInterval: document.querySelector('#trainCheckpointInterval'),
+  trainDevice: document.querySelector('#trainDevice'),
   trainResumeCheckpoint: document.querySelector('#trainResumeCheckpoint'),
   startTrainingButton: document.querySelector('#startTrainingButton'),
   stopTrainingButton: document.querySelector('#stopTrainingButton'),
@@ -276,6 +277,7 @@ function readTrainingSettings() {
     maxSteps: Number(elements.trainMaxSteps.value),
     evalInterval: Number(elements.trainEvalInterval.value),
     checkpointInterval: Number(elements.trainCheckpointInterval.value),
+    device: elements.trainDevice.value,
     resume: elements.trainResumeCheckpoint.value.trim(),
   };
 }
