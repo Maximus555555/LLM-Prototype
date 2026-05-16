@@ -37,6 +37,10 @@ const WEB_SEARCH_MAX_RESULTS = 5;
 const WEB_FETCH_TIMEOUT_MS = 12_000;
 const BACKGROUND_INGEST_INTERVAL_MS = Number(process.env.BACKGROUND_INGEST_INTERVAL_MS || 90_000);
 const BACKGROUND_INGESTION_ENABLED = process.env.DISABLE_BACKGROUND_INGESTION !== '1';
+const BACKGROUND_TRAINING_ENABLED = process.env.DISABLE_BACKGROUND_TRAINING !== '1';
+const BACKGROUND_TRAINING_MAX_STEPS = Number(process.env.BACKGROUND_TRAINING_MAX_STEPS || 25);
+const BACKGROUND_TRAINING_EVAL_INTERVAL = Number(process.env.BACKGROUND_TRAINING_EVAL_INTERVAL || 25);
+const BACKGROUND_TRAINING_CHECKPOINT_INTERVAL = Number(process.env.BACKGROUND_TRAINING_CHECKPOINT_INTERVAL || 25);
 const BACKGROUND_TOPICS = [
   'computer science education programming tutorial',
   'open educational resources science technology',
@@ -1094,8 +1098,9 @@ function runPythonGeneration({ prompt, temperature, maxTokens, topK, checkpointP
       '--device',
       'cpu',
     ];
-    if (checkpointPath) {
-      args.splice(2, 0, '--checkpoint', String(checkpointPath));
+    const effectiveCheckpointPath = checkpointPath || (fs.existsSync(path.join(CHECKPOINT_DIR, 'latest.pt')) ? 'checkpoints/latest.pt' : '');
+    if (effectiveCheckpointPath) {
+      args.splice(2, 0, '--checkpoint', String(effectiveCheckpointPath));
     }
     if (tokenizerPath) {
       args.push('--tokenizer', String(tokenizerPath));
@@ -1150,10 +1155,14 @@ function startTrainingProcess(options = {}) {
     '--max-steps', String(clampTrainingInteger(options.maxSteps, 200, 1, 100000)),
     '--eval-interval', String(clampTrainingInteger(options.evalInterval, 25, 1, 10000)),
     '--checkpoint-interval', String(clampTrainingInteger(options.checkpointInterval, 50, 1, 10000)),
-    '--device', String(options.device || 'auto'),
+    '--device', ['auto', 'cpu', 'cuda', 'mps'].includes(String(options.device || 'auto')) ? String(options.device || 'auto') : 'auto',
   ];
+  if (options.watch) {
+    args.push('--watch');
+    args.push('--reload-data-interval', String(clampNumber(options.reloadDataInterval, 5, 0, 3600)));
+  }
   if (options.resume) {
-    const resumePath = path.join(ROOT, String(options.resume));
+    const resumePath = path.resolve(ROOT, String(options.resume));
     if (!resumePath.startsWith(ROOT + path.sep) || !fs.existsSync(resumePath)) {
       throw new Error('Resume checkpoint must be an existing file in this repository.');
     }
@@ -1211,6 +1220,38 @@ function stopTrainingProcess() {
   return getTrainingStatus();
 }
 
+function startBackgroundTraining() {
+  if (!BACKGROUND_TRAINING_ENABLED) {
+    trainingState.status = 'disabled';
+    appendTrainingConsole('Background local weight training is disabled with DISABLE_BACKGROUND_TRAINING=1.\n');
+    return;
+  }
+  if (trainingState.process) {
+    return;
+  }
+  try {
+    const latestPath = path.join(CHECKPOINT_DIR, 'latest.pt');
+    startTrainingProcess({
+      watch: true,
+      resume: fs.existsSync(latestPath) ? 'checkpoints/latest.pt' : '',
+      maxSteps: BACKGROUND_TRAINING_MAX_STEPS,
+      evalInterval: BACKGROUND_TRAINING_EVAL_INTERVAL,
+      checkpointInterval: BACKGROUND_TRAINING_CHECKPOINT_INTERVAL,
+      batchSize: Number(process.env.BACKGROUND_TRAINING_BATCH_SIZE || 8),
+      learningRate: Number(process.env.BACKGROUND_TRAINING_LEARNING_RATE || 0.0003),
+      device: process.env.BACKGROUND_TRAINING_DEVICE || 'auto',
+      reloadDataInterval: Number(process.env.BACKGROUND_TRAINING_RELOAD_INTERVAL || 10),
+    });
+    appendTrainingConsole(
+      'Background local weight training is running. It uses local_training_data/ and periodically reloads new files; '
+      + 'it does not use OpenAI, API keys, or paid services.\n',
+    );
+  } catch (error) {
+    appendTrainingConsole(`Background training did not start: ${error.message}\n`);
+    trainingState.status = 'error';
+  }
+}
+
 async function handleApi(request, response, url) {
   if (request.method === 'GET' && url.pathname === '/api/status') {
     const knowledgeBase = loadKnowledgeBase();
@@ -1227,6 +1268,7 @@ async function handleApi(request, response, url) {
       webKnowledgeItems: webKnowledgeState.items.length,
       internetAccess: true,
       backgroundIngestion: webKnowledgeState.background,
+      backgroundTraining: { enabled: BACKGROUND_TRAINING_ENABLED, status: getTrainingStatus() },
       defaultConfig: 'configs/tiny.json',
       runtimes: ['local-chat', 'demo', 'local-python'],
       trainingSupport: true,
@@ -1422,6 +1464,7 @@ const server = http.createServer(async (request, response) => {
 if (require.main === module) {
   server.listen(PORT, () => {
     startBackgroundIngestion();
+    startBackgroundTraining();
     console.log(`Local conversation prototype running at http://localhost:${PORT}`);
     console.log('No external AI service is used. Add local text files under local_knowledge/ or use optional no-key web retrieval to expand local memory.');
   });

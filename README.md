@@ -67,15 +67,16 @@ Because no trained weights are included, the bundled transformer is not a knowle
 Training is local-only. It does not connect to OpenAI, does not call external AI services, and does not require an API key.
 
 1. Put training files under `local_training_data/`. The trainer loads `.txt`, `.md`, and `.json` files recursively.
-2. Run `npm run train` or use the browser **Training** panel.
+2. Run `npm run train` for a bounded CLI run, or start the app with `npm start` to launch a background continuous training worker alongside the server.
 3. The script tokenizes the combined local text with the existing tokenizer, creates train/validation splits, trains the existing transformer for next-token prediction, prints train/validation loss, clips gradients, and saves PyTorch checkpoints under `checkpoints/`.
-4. The latest trained model is saved as `checkpoints/latest.pt`.
-5. In the browser, select `latest.pt` from the checkpoint list to set `checkpoints/latest.pt` as the Local Python transformer checkpoint for generation.
+4. The latest trained model is saved as `checkpoints/latest.pt`, and training automatically resumes from it on future starts unless you pass `--no-auto-resume`.
+5. Background training periodically reloads `local_training_data/` and the local no-key ingestion export at `data/web_knowledge.json`, so new files or newly gathered internet content become part of future training cycles.
+6. In the browser, select `latest.pt` from the checkpoint list to set `checkpoints/latest.pt` as the Local Python transformer checkpoint for generation. If no checkpoint is selected, the local Python generator automatically uses `checkpoints/latest.pt` when it exists.
 
 You can configure training from the CLI, for example:
 
 ```bash
-PYTHONPATH=src python3 scripts/train.py --batch-size 4 --learning-rate 0.0003 --max-steps 500 --eval-interval 50 --checkpoint-interval 100
+PYTHONPATH=src python3 scripts/train.py --batch-size 4 --learning-rate 0.0003 --max-steps 500 --eval-interval 50 --checkpoint-interval 100 --device auto
 ```
 
 Resume from a checkpoint with:
@@ -83,6 +84,8 @@ Resume from a checkpoint with:
 ```bash
 PYTHONPATH=src python3 scripts/train.py --resume checkpoints/latest.pt
 ```
+
+For a continuous foreground run that keeps reloading new local and ingested data, use `PYTHONPATH=src python3 scripts/train.py --watch`. `npm start` runs the same local-only training path in the background by default; set `DISABLE_BACKGROUND_TRAINING=1` if you only want the web server.
 
 This training path can improve the tiny local model relative to random weights, but it does **not** create a ChatGPT-quality model and does **not** make the model intelligent. Quality depends on the amount of local data, model size, training time, and available CPU/GPU. If no `checkpoints/latest.pt` exists, the Python transformer should be considered untrained/random.
 

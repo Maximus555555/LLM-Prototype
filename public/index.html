@@ -145,6 +145,7 @@
             <label for="trainMaxSteps">Max steps<input id="trainMaxSteps" type="number" min="1" max="100000" value="200" /></label>
             <label for="trainEvalInterval">Eval interval<input id="trainEvalInterval" type="number" min="1" max="10000" value="25" /></label>
             <label for="trainCheckpointInterval">Checkpoint interval<input id="trainCheckpointInterval" type="number" min="1" max="10000" value="50" /></label>
+            <label for="trainDevice">Device<select id="trainDevice"><option value="auto">Auto CPU/GPU</option><option value="cpu">CPU</option><option value="cuda">CUDA GPU</option><option value="mps">Apple MPS</option></select></label>
             <label for="trainResumeCheckpoint">Resume checkpoint<input id="trainResumeCheckpoint" type="text" placeholder="checkpoints/latest.pt" /></label>
           </div>
 

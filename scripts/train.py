@@ -13,6 +13,7 @@ import json
 import math
 import random
 import shutil
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
@@ -55,10 +56,14 @@ def iter_training_files(data_dir: Path) -> Iterable[Path]:
     )
 
 
-def load_local_text(data_dir: Path) -> tuple[str, list[Path], int]:
-    """Load and combine all supported local training files."""
+def load_local_text(data_dir: Path, extra_files: Iterable[Path] = ()) -> tuple[str, list[Path], int]:
+    """Load and combine supported local training files plus optional ingested JSON exports."""
 
     files = list(iter_training_files(data_dir))
+    for extra_file in extra_files:
+        if extra_file.exists() and extra_file.is_file() and extra_file.suffix.lower() in SUPPORTED_EXTENSIONS:
+            files.append(extra_file)
+    files = sorted(dict.fromkeys(files))
     sections: list[str] = []
     character_count = 0
     for path in files:
@@ -74,10 +79,16 @@ def load_local_text(data_dir: Path) -> tuple[str, list[Path], int]:
     return "".join(sections), files, character_count
 
 
-def build_token_splits(data_dir: Path, tokenizer: ByteTokenizer, validation_fraction: float, seed: int) -> TokenSplits:
+def build_token_splits(
+    data_dir: Path,
+    tokenizer: ByteTokenizer,
+    validation_fraction: float,
+    seed: int,
+    extra_files: Iterable[Path] = (),
+) -> TokenSplits:
     """Tokenize local text and create deterministic train/validation splits."""
 
-    text, files, character_count = load_local_text(data_dir)
+    text, files, character_count = load_local_text(data_dir, extra_files)
     if not files:
         raise ValueError(f"No .txt, .md, or .json files found under {data_dir}/.")
     validation_fraction = min(max(validation_fraction, 0.01), 0.5)
@@ -171,7 +182,11 @@ def main() -> None:
     parser.add_argument("--config", type=Path, default=Path("configs/tiny.json"), help="Model config JSON.")
     parser.add_argument("--data-dir", type=Path, default=Path("local_training_data"), help="Local training data directory.")
     parser.add_argument("--output-dir", type=Path, default=Path("checkpoints"), help="Checkpoint output directory.")
+    parser.add_argument("--web-knowledge-file", type=Path, default=Path("data/web_knowledge.json"), help="Optional local JSON file written by no-key internet ingestion; included in future training when present.")
     parser.add_argument("--resume", type=Path, help="Optional checkpoint to resume from, for example checkpoints/latest.pt.")
+    parser.add_argument("--no-auto-resume", action="store_true", help="Do not automatically resume from output-dir/latest.pt when it exists.")
+    parser.add_argument("--watch", action="store_true", help="Keep training forever, periodically reloading local training data so new files are included in future batches.")
+    parser.add_argument("--reload-data-interval", type=float, default=5.0, help="Seconds to wait between continuous training cycles or while waiting for training files.")
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--learning-rate", type=float, default=3e-4)
     parser.add_argument("--max-steps", type=int, default=200, help="Number of optimizer steps to run; when resuming, these are additional steps.")
@@ -186,64 +201,122 @@ def main() -> None:
 
     if args.batch_size <= 0 or args.max_steps <= 0:
         raise ValueError("batch size and max steps must be positive")
+    if args.reload_data_interval < 0:
+        raise ValueError("reload data interval must be non-negative")
     if args.eval_interval <= 0 or args.checkpoint_interval <= 0:
         raise ValueError("eval interval and checkpoint interval must be positive")
 
     torch.manual_seed(args.seed)
     tokenizer = ByteTokenizer()
-    splits = build_token_splits(args.data_dir, tokenizer, args.validation_fraction, args.seed)
 
     if args.device == "auto":
         device = "cuda" if torch.cuda.is_available() else "cpu"
     else:
         device = args.device
 
-    if args.resume:
-        model, checkpoint = TransformerLanguageModel.load_checkpoint(args.resume, map_location=device)
+    latest_checkpoint = args.output_dir / "latest.pt"
+    resume_path = args.resume
+    if resume_path is None and not args.no_auto_resume and latest_checkpoint.exists():
+        resume_path = latest_checkpoint
+
+    if resume_path:
+        model, checkpoint = TransformerLanguageModel.load_checkpoint(resume_path, map_location=device)
         start_step = int(checkpoint.get("step", 0))
+        print(f"Resuming local transformer training from {resume_path.as_posix()} at step {start_step}.", flush=True)
     else:
         model = TransformerLanguageModel(ModelConfig.from_json(args.config))
         checkpoint = {}
         start_step = 0
+        print("Starting local transformer training from fresh random weights.", flush=True)
     model.to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate)
     if checkpoint.get("optimizer_state_dict"):
         optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
 
-    block_size = model.config.max_sequence_length
     print(
-        "Loaded local training data: "
-        f"files={len(splits.files)} characters={splits.character_count} "
-        f"train_tokens={splits.train.numel()} validation_tokens={splits.validation.numel()} device={device}",
+        "WARNING: local weight training may be slow, especially on CPU. Quality depends on "
+        "the amount of data, model size, training time, and CPU/GPU hardware. This will not "
+        "produce a ChatGPT-quality model.",
         flush=True,
     )
 
+    current_step = start_step
     last_train_loss: float | None = None
     last_validation_loss: float | None = None
-    extra = {
-        "data_dir": args.data_dir.as_posix(),
-        "config_path": args.config.as_posix(),
-        "files": [path.as_posix() for path in splits.files],
-        "character_count": splits.character_count,
-        "tokenizer": "byte",
-        "no_external_ai_services": True,
-    }
+    block_size = model.config.max_sequence_length
 
-    target_step = start_step + args.max_steps
+    while True:
+        try:
+            extra_files = [args.web_knowledge_file] if args.web_knowledge_file else []
+            splits = build_token_splits(args.data_dir, tokenizer, args.validation_fraction, args.seed + current_step, extra_files)
+        except ValueError as error:
+            if not args.watch:
+                raise
+            print(f"Waiting for local training data in {args.data_dir.as_posix()}/: {error}", flush=True)
+            time.sleep(args.reload_data_interval)
+            continue
 
-    for step in range(start_step + 1, target_step + 1):
-        x, y = get_batch(splits.train, args.batch_size, block_size, device)
-        output = model(x, targets=y)
-        loss = output["loss"]
-        assert loss is not None
-        optimizer.zero_grad(set_to_none=True)
-        loss.backward()
-        if args.gradient_clip > 0:
-            torch.nn.utils.clip_grad_norm_(model.parameters(), args.gradient_clip)
-        optimizer.step()
-        last_train_loss = float(loss.item())
+        print(
+            "Loaded local training data: "
+            f"files={len(splits.files)} characters={splits.character_count} "
+            f"train_tokens={splits.train.numel()} validation_tokens={splits.validation.numel()} device={device}",
+            flush=True,
+        )
 
-        if step == 1 or step % args.eval_interval == 0 or step == target_step:
+        extra = {
+            "data_dir": args.data_dir.as_posix(),
+            "web_knowledge_file": args.web_knowledge_file.as_posix() if args.web_knowledge_file else None,
+            "config_path": args.config.as_posix(),
+            "files": [path.as_posix() for path in splits.files],
+            "character_count": splits.character_count,
+            "tokenizer": "byte",
+            "no_external_ai_services": True,
+            "continuous_training": bool(args.watch),
+            "warning": "Local training can be slow; quality depends on data, model size, training time, and hardware.",
+        }
+
+        target_step = current_step + args.max_steps
+
+        for step in range(current_step + 1, target_step + 1):
+            x, y = get_batch(splits.train, args.batch_size, block_size, device)
+            output = model(x, targets=y)
+            loss = output["loss"]
+            assert loss is not None
+            optimizer.zero_grad(set_to_none=True)
+            loss.backward()
+            if args.gradient_clip > 0:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), args.gradient_clip)
+            optimizer.step()
+            last_train_loss = float(loss.item())
+            current_step = step
+
+            if step == start_step + 1 or step % args.eval_interval == 0 or step == target_step:
+                last_train_loss, last_validation_loss = evaluate(
+                    model,
+                    splits.train,
+                    splits.validation,
+                    args.batch_size,
+                    block_size,
+                    args.eval_batches,
+                    device,
+                )
+                print(f"step {step}: train_loss={last_train_loss:.4f} validation_loss={last_validation_loss:.4f}", flush=True)
+            else:
+                print(f"step {step}: train_loss={last_train_loss:.4f}", flush=True)
+
+            if step % args.checkpoint_interval == 0 or step == target_step:
+                checkpoint_path = save_training_checkpoint(
+                    model,
+                    optimizer,
+                    args.output_dir,
+                    step,
+                    last_train_loss,
+                    last_validation_loss,
+                    extra,
+                )
+                print(f"saved checkpoint {checkpoint_path.as_posix()} and {args.output_dir / 'latest.pt'}", flush=True)
+
+        if last_validation_loss is None:
             last_train_loss, last_validation_loss = evaluate(
                 model,
                 splits.train,
@@ -253,39 +326,17 @@ def main() -> None:
                 args.eval_batches,
                 device,
             )
-            print(f"step {step}: train_loss={last_train_loss:.4f} validation_loss={last_validation_loss:.4f}", flush=True)
-        else:
-            print(f"step {step}: train_loss={last_train_loss:.4f}", flush=True)
-
-        if step % args.checkpoint_interval == 0 or step == target_step:
-            checkpoint_path = save_training_checkpoint(
-                model,
-                optimizer,
-                args.output_dir,
-                step,
-                last_train_loss,
-                last_validation_loss,
-                extra,
-            )
-            print(f"saved checkpoint {checkpoint_path.as_posix()} and {args.output_dir / 'latest.pt'}", flush=True)
-
-    if last_validation_loss is None:
-        last_train_loss, last_validation_loss = evaluate(
-            model,
-            splits.train,
-            splits.validation,
-            args.batch_size,
-            block_size,
-            args.eval_batches,
-            device,
+        save_training_checkpoint(model, optimizer, args.output_dir, current_step, last_train_loss, last_validation_loss, extra)
+        print(
+            "Training cycle complete. "
+            f"latest_checkpoint={(args.output_dir / 'latest.pt').as_posix()} "
+            f"train_loss={last_train_loss:.4f} validation_loss={last_validation_loss:.4f}",
+            flush=True,
         )
-    save_training_checkpoint(model, optimizer, args.output_dir, target_step, last_train_loss, last_validation_loss, extra)
-    print(
-        "Training complete. "
-        f"latest_checkpoint={(args.output_dir / 'latest.pt').as_posix()} "
-        f"train_loss={last_train_loss:.4f} validation_loss={last_validation_loss:.4f}",
-        flush=True,
-    )
+
+        if not args.watch:
+            break
+        time.sleep(args.reload_data_interval)
 
 
 if __name__ == "__main__":
