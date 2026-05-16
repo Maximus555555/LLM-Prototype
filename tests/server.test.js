@@ -96,3 +96,25 @@ test('public app uses relative assets for project GitHub Pages paths', () => {
   assert.doesNotMatch(publicIndex, /href="\/styles\.css"/);
   assert.doesNotMatch(publicIndex, /src="\/app\.js"/);
 });
+
+
+test('browser app disables API polling after detecting static GitHub Pages mode', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const app = fs.readFileSync(path.join(__dirname, '..', 'public', 'app.js'), 'utf8');
+
+  assert.match(app, /let staticPreviewMode = false/);
+  assert.match(app, /if \(!apiAvailable\) \{\n    return;\n  \}/);
+  assert.match(app, /knowledgeRefreshTimer = setInterval\(refreshKnowledge, 30000\)/);
+  assert.doesNotMatch(app, /loadStatus\(\);\nrefreshKnowledge\(\);/);
+});
+
+test('background training is opt-in so the server stays responsive by default', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const serverSource = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+
+  assert.match(serverSource, /process\.env\.ENABLE_BACKGROUND_TRAINING === '1'/);
+  assert.doesNotMatch(serverSource, /const BACKGROUND_TRAINING_ENABLED = process\.env\.DISABLE_BACKGROUND_TRAINING !== '1'/);
+  assert.match(serverSource, /let knowledgeBaseCache = null/);
+});
