@@ -1,4 +1,6 @@
 const q = (selector) => document.querySelector(selector);
+let staticPreviewMode = false;
+let knowledgeRefreshTimer = null;
 
 const elements = {
   serverStatus: q('#serverStatus'),
@@ -160,10 +162,13 @@ async function sendMessage(event) {
   messages.push({ role: 'user', content: message });
   elements.messageInput.value = '';
   elements.sendButton.disabled = true;
-  elements.outputMeta.textContent = /search the internet for/i.test(message) ? 'Searching web…' : (/https?:\/\//i.test(message) ? 'Retrieving page…' : 'Thinking locally…');
+  elements.outputMeta.textContent = staticPreviewMode ? 'Static preview' : (/search the internet for/i.test(message) ? 'Searching web…' : (/https?:\/\//i.test(message) ? 'Retrieving page…' : 'Thinking locally…'));
   renderMessages();
 
   try {
+    if (staticPreviewMode) {
+      throw Object.assign(new Error('Static preview mode'), { status: 404 });
+    }
     const data = await requestJson('/api/chat', {
       method: 'POST',
       body: JSON.stringify({ message, history: messages.slice(-12) }),
@@ -229,11 +234,22 @@ function renderKnowledge(data) {
 }
 
 async function refreshKnowledge() {
+  if (staticPreviewMode) {
+    return;
+  }
   try {
     const data = await requestJson('/api/knowledge');
     renderKnowledge(data);
     logConsole(`Loaded ${data.documents.length} knowledge document(s) from ${data.directory} and ${data.webKnowledgePath}.`);
   } catch (error) {
+    if (isApiUnavailable(error)) {
+      staticPreviewMode = true;
+      if (knowledgeRefreshTimer) {
+        clearInterval(knowledgeRefreshTimer);
+        knowledgeRefreshTimer = null;
+      }
+      return;
+    }
     logConsole(error.message, 'error');
   }
 }
@@ -379,19 +395,26 @@ async function stopTraining() {
 async function loadStatus() {
   try {
     const status = await requestJson('/api/status');
+    staticPreviewMode = false;
     elements.serverStatus.textContent = status.name;
     elements.runtimeStatus.textContent = `Chat + webpage mode • ${status.webKnowledgeItems || 0} saved web items • API keys required: ${status.apiKeysRequired ? 'yes' : 'no'}`;
     logConsole(`Server ready. Knowledge directory: ${status.knowledgeDirectory}`);
+    return true;
   } catch (error) {
     if (isApiUnavailable(error)) {
+      staticPreviewMode = true;
       elements.serverStatus.textContent = 'Static GitHub Pages preview';
       elements.runtimeStatus.textContent = 'Interface loaded without the local Node API. Run npm start for the full app.';
+      if (elements.backgroundStatus) {
+        elements.backgroundStatus.textContent = 'Static preview: local API polling is disabled on GitHub Pages.';
+      }
       logConsole('Static preview mode: run npm start locally to enable API-backed chat and retrieval.');
     } else {
       elements.serverStatus.textContent = 'Server status failed';
       elements.runtimeStatus.textContent = error.message;
       logConsole(error.message, 'error');
     }
+    return false;
   }
 }
 
@@ -529,15 +552,22 @@ function wireEvents() {
   on(elements.refreshTrainingButton, 'click', refreshTrainingStatus);
 }
 
-renderMessages();
-wireEvents();
-loadStatus();
-refreshKnowledge();
-if (elements.checkpointSelect) {
-  refreshCheckpoints().catch((error) => logConsole(error.message, 'error'));
+async function initializeApp() {
+  renderMessages();
+  wireEvents();
+  const apiAvailable = await loadStatus();
+  if (!apiAvailable) {
+    return;
+  }
+  await refreshKnowledge();
+  if (elements.checkpointSelect) {
+    refreshCheckpoints().catch((error) => logConsole(error.message, 'error'));
+  }
+  if (elements.trainingStatus) {
+    refreshTrainingStatus();
+    setInterval(refreshTrainingStatus, 5000);
+  }
+  knowledgeRefreshTimer = setInterval(refreshKnowledge, 30000);
 }
-if (elements.trainingStatus) {
-  refreshTrainingStatus();
-  setInterval(refreshTrainingStatus, 5000);
-}
-setInterval(refreshKnowledge, 15000);
+
+initializeApp();

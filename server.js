@@ -37,7 +37,7 @@ const WEB_SEARCH_MAX_RESULTS = 5;
 const WEB_FETCH_TIMEOUT_MS = 12_000;
 const BACKGROUND_INGEST_INTERVAL_MS = Number(process.env.BACKGROUND_INGEST_INTERVAL_MS || 90_000);
 const BACKGROUND_INGESTION_ENABLED = process.env.DISABLE_BACKGROUND_INGESTION !== '1';
-const BACKGROUND_TRAINING_ENABLED = process.env.DISABLE_BACKGROUND_TRAINING !== '1';
+const BACKGROUND_TRAINING_ENABLED = process.env.ENABLE_BACKGROUND_TRAINING === '1' && process.env.DISABLE_BACKGROUND_TRAINING !== '1';
 const BACKGROUND_TRAINING_MAX_STEPS = Number(process.env.BACKGROUND_TRAINING_MAX_STEPS || 25);
 const BACKGROUND_TRAINING_EVAL_INTERVAL = Number(process.env.BACKGROUND_TRAINING_EVAL_INTERVAL || 25);
 const BACKGROUND_TRAINING_CHECKPOINT_INTERVAL = Number(process.env.BACKGROUND_TRAINING_CHECKPOINT_INTERVAL || 25);
@@ -67,6 +67,7 @@ const webKnowledgeState = {
 
 let activeChatResponses = 0;
 let backgroundTimer = null;
+let knowledgeBaseCache = null;
 
 const trainingState = {
   process: null,
@@ -792,8 +793,22 @@ function chunkText(text, source) {
   }));
 }
 
+function getKnowledgeSignature(files) {
+  const localSignature = files.map((filePath) => {
+    const stats = fs.statSync(filePath);
+    return `${filePath}:${stats.size}:${stats.mtimeMs}`;
+  }).join('|');
+  const webSignature = `${webKnowledgeState.items.length}:${webKnowledgeState.savedAt || ''}:${webKnowledgeState.items[0]?.contentHash || ''}`;
+  return `${localSignature}::${webSignature}`;
+}
+
 function loadKnowledgeBase() {
   const files = walkKnowledgeFiles();
+  const signature = getKnowledgeSignature(files);
+  if (knowledgeBaseCache?.signature === signature) {
+    return knowledgeBaseCache.value;
+  }
+
   const documents = [];
   const chunks = [];
   for (const filePath of files) {
@@ -825,7 +840,10 @@ function loadKnowledgeBase() {
     });
     chunks.push(...itemChunks);
   }
-  return { documents, chunks, loadedAt: new Date().toISOString() };
+
+  const value = { documents, chunks, loadedAt: new Date().toISOString() };
+  knowledgeBaseCache = { signature, value };
+  return value;
 }
 
 loadWebKnowledge();
