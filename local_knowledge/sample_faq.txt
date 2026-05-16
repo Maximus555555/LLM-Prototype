@@ -1,0 +1,14 @@
+Q: Does this app connect to OpenAI or an external AI service?
+A: No. The local chat route uses Node.js, local files, chat history, keyword retrieval, and response rules only.
+
+Q: Does this app require an API key?
+A: No. It is designed to run with npm start without paid services or hosted model credentials.
+
+Q: Is the assistant a real trained LLM?
+A: No. The conversational assistant should be described as a local retrieval-and-rules interface. The repository includes educational model code, but no trained conversational weights are bundled.
+
+Q: How does memory work?
+A: The browser keeps a message history for the current conversation and sends recent turns with each chat request. The server uses recent topics to keep replies contextual.
+
+Q: What happens when the app does not know an answer?
+A: It should say that it does not have a confident local-knowledge match, avoid inventing facts, and suggest adding relevant local files.

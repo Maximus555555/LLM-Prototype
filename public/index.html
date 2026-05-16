@@ -3,18 +3,18 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>LLM Prototype Interface</title>
+    <title>Local Conversation Prototype</title>
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
     <main class="app-shell">
       <section class="hero panel">
         <div>
-          <p class="eyebrow">Local LLM Prototype</p>
-          <h1>Prompt, generate, inspect, and checkpoint local experiments.</h1>
+          <p class="eyebrow">Local Conversation Prototype</p>
+          <h1>Chat with local files, conversation memory, and retrieval rules.</h1>
           <p class="hero-copy">
-            This interface is wired for the repository's local transformer code and includes a no-dependency demo runtime.
-            It never contacts OpenAI or external AI services and does not require API keys.
+            This app uses generated/local content only. It does not call OpenAI or external AI services, does not require an API key,
+            and does not claim to be a trained hosted LLM. It searches local text files before responding.
           </p>
         </div>
         <div class="status-card" aria-live="polite">
@@ -26,26 +26,53 @@
         </div>
       </section>
 
-      <section class="workspace">
-        <section class="panel prompt-panel" aria-labelledby="promptHeading">
+      <section class="workspace chat-workspace">
+        <section class="panel chat-panel" aria-labelledby="chatHeading">
           <div class="section-header">
             <div>
-              <p class="eyebrow">Prompt</p>
-              <h2 id="promptHeading">Input</h2>
+              <p class="eyebrow">Conversation</p>
+              <h2 id="chatHeading">Local chat</h2>
             </div>
-            <button id="samplePromptButton" class="ghost-button" type="button">Use sample</button>
+            <div class="action-row compact-actions">
+              <button id="samplePromptButton" class="ghost-button" type="button">Use sample</button>
+              <button id="clearChatButton" class="secondary-button" type="button">Clear chat</button>
+            </div>
           </div>
-          <label class="visually-hidden" for="promptInput">Prompt text</label>
-          <textarea id="promptInput" placeholder="Describe what you want the local prototype to generate…"></textarea>
-          <div class="action-row">
-            <button id="generateButton" class="primary-button" type="button">Generate</button>
-            <button id="clearButton" class="secondary-button" type="button">Clear output</button>
-          </div>
+
+          <div id="chatHistory" class="chat-history" aria-live="polite"></div>
+
+          <form id="chatForm" class="chat-composer">
+            <label class="visually-hidden" for="messageInput">Message text</label>
+            <textarea id="messageInput" rows="3" placeholder="Ask about the local prototype, model code, no-API rule, or files in local_knowledge/…"></textarea>
+            <button id="sendButton" class="primary-button" type="submit">Send</button>
+          </form>
         </section>
 
+        <aside class="panel knowledge-panel" aria-labelledby="knowledgeHeading">
+          <p class="eyebrow">Retrieval</p>
+          <h2 id="knowledgeHeading">Local knowledge</h2>
+          <p class="panel-copy">
+            Drop .txt, .md, or .json files into <code>local_knowledge/</code>. The server ingests them from disk and searches them before each reply.
+          </p>
+          <div class="knowledge-stats">
+            <strong id="knowledgeCount">0 files</strong>
+            <small id="chunkCount">0 chunks indexed</small>
+          </div>
+          <button id="refreshKnowledgeButton" class="secondary-button full-button" type="button">Refresh knowledge</button>
+          <ul id="knowledgeList" class="knowledge-list"></ul>
+        </aside>
+      </section>
+
+      <section class="workspace lower-grid">
         <aside class="panel settings-panel" aria-labelledby="settingsHeading">
-          <p class="eyebrow">Model</p>
-          <h2 id="settingsHeading">Settings</h2>
+          <p class="eyebrow">Optional local model</p>
+          <h2 id="settingsHeading">Existing generator</h2>
+          <p class="panel-copy">
+            The chat above uses local retrieval/rules. This optional tool keeps the existing local demo and untrained Python transformer path available.
+          </p>
+
+          <label for="promptInput">Prompt</label>
+          <textarea id="promptInput" placeholder="Optional prompt for the existing local generator…"></textarea>
 
           <label for="runtimeSelect">Runtime</label>
           <select id="runtimeSelect">
@@ -67,26 +94,31 @@
 
           <label for="tokenizerPath">Tokenizer path (optional)</label>
           <input id="tokenizerPath" type="text" placeholder="tokenizer.json" />
-        </aside>
-      </section>
 
-      <section class="workspace lower-grid">
+          <div class="action-row">
+            <button id="generateButton" class="secondary-button" type="button">Run generator</button>
+            <button id="clearButton" class="ghost-button" type="button">Clear output</button>
+          </div>
+        </aside>
+
         <section class="panel output-panel" aria-labelledby="outputHeading">
           <div class="section-header">
             <div>
-              <p class="eyebrow">Response</p>
-              <h2 id="outputHeading">Output area</h2>
+              <p class="eyebrow">AI response area</p>
+              <h2 id="outputHeading">Latest local response</h2>
             </div>
             <span id="outputMeta" class="pill">Waiting</span>
           </div>
-          <pre id="outputArea" class="output-box">Generated text will appear here.</pre>
+          <pre id="outputArea" class="output-box">Responses will appear here.</pre>
         </section>
+      </section>
 
+      <section class="workspace lower-grid">
         <aside class="panel checkpoint-panel" aria-labelledby="checkpointHeading">
           <p class="eyebrow">Checkpoints</p>
           <h2 id="checkpointHeading">Save / load</h2>
           <p class="panel-copy">
-            Save and load interface sessions locally. The Python model also supports tensor checkpoints through the optional path field above.
+            Save and load the current local conversation and optional generator settings as local JSON files.
           </p>
           <label for="checkpointName">Checkpoint name</label>
           <input id="checkpointName" type="text" value="interface-session" />
@@ -97,17 +129,17 @@
           <label for="checkpointSelect">Available checkpoints</label>
           <select id="checkpointSelect"></select>
         </aside>
-      </section>
 
-      <section class="panel console-panel" aria-labelledby="consoleHeading">
-        <div class="section-header">
-          <div>
-            <p class="eyebrow">Console</p>
-            <h2 id="consoleHeading">Errors and runtime messages</h2>
+        <section class="panel console-panel" aria-labelledby="consoleHeading">
+          <div class="section-header">
+            <div>
+              <p class="eyebrow">Console</p>
+              <h2 id="consoleHeading">Local runtime messages</h2>
+            </div>
+            <button id="clearConsoleButton" class="ghost-button" type="button">Clear console</button>
           </div>
-          <button id="clearConsoleButton" class="ghost-button" type="button">Clear console</button>
-        </div>
-        <pre id="consoleArea" class="console-box">Console is ready.</pre>
+          <pre id="consoleArea" class="console-box">Console is ready.</pre>
+        </section>
       </section>
     </main>
 
