@@ -6,7 +6,7 @@
   "type": "commonjs",
   "scripts": {
     "start": "node server.js",
-    "test": "python -m pytest"
+    "test": "node --test tests/server.test.js && python -m pytest"
   },
   "dependencies": {},
   "engines": {

@@ -22,13 +22,14 @@ The included web app provides:
 - Send button.
 - AI response area for the latest local response.
 - Basic memory within the current conversation.
+- Built-in handling for greetings, conversational check-ins, capability questions, thanks, simple memory prompts, and arithmetic expressions.
 - A local knowledge folder at `local_knowledge/`.
 - A simple ingestion system that loads `.txt`, `.md`, and `.json` files from `local_knowledge/` recursively.
 - A retrieval system that searches local content before responding.
 - Fallback responses when the local files do not contain enough matching information.
 - A local-only design: no OpenAI calls, no external AI service calls, no API keys, and no paid service dependencies.
 
-The default chat experience is a **local retrieval-and-rules assistant**, not a hosted trained LLM. It uses current browser chat history, local file search, and response templates to feel conversational while staying transparent about its limits.
+The default chat experience is a **local retrieval-and-rules assistant**, not a hosted trained LLM. It uses current browser chat history, local file search, arithmetic parsing, and response templates to feel conversational while staying transparent about its limits.
 
 ## Feeding local content into the app
 

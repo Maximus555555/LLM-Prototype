@@ -196,19 +196,176 @@ function summarizeMemory(history) {
   return {
     turns: recent.length,
     recentUserTopics: userTurns.slice(-3),
+    lastUserMessage: userTurns.at(-1) || '',
     lastAssistantNote: assistantTurns.at(-1) || '',
   };
 }
 
+function formatNumber(value) {
+  if (!Number.isFinite(value)) {
+    return 'undefined';
+  }
+  if (Number.isInteger(value)) {
+    return String(value);
+  }
+  return String(Number(value.toFixed(10))).replace(/\.0+$/, '');
+}
+
+function extractMathExpression(message) {
+  const normalized = String(message || '')
+    .toLowerCase()
+    .replace(/[×x]/g, '*')
+    .replace(/[÷]/g, '/')
+    .replace(/plus/g, '+')
+    .replace(/minus/g, '-')
+    .replace(/times|multiplied by/g, '*')
+    .replace(/divided by|over/g, '/')
+    .replace(/to the power of/g, '^')
+    .replace(/squared/g, '^2')
+    .replace(/cubed/g, '^3');
+  const candidate = normalized.match(/[-+*/^%(). 0-9]+/g)?.map((part) => part.trim()).filter((part) => /\d/.test(part) && /[-+*/^%]/.test(part)).sort((a, b) => b.length - a.length)[0];
+  return candidate || '';
+}
+
+function parseMathExpression(expression) {
+  const tokens = String(expression || '').match(/\d+(?:\.\d+)?|[()+\-*/^%]/g) || [];
+  let index = 0;
+
+  function peek() {
+    return tokens[index];
+  }
+
+  function consume(expected) {
+    const token = tokens[index];
+    if (expected && token !== expected) {
+      throw new Error(`Expected ${expected}.`);
+    }
+    index += 1;
+    return token;
+  }
+
+  function parsePrimary() {
+    const token = peek();
+    if (token === '+') {
+      consume('+');
+      return parsePrimary();
+    }
+    if (token === '-') {
+      consume('-');
+      return -parsePrimary();
+    }
+    if (token === '(') {
+      consume('(');
+      const value = parseAddSubtract();
+      consume(')');
+      return value;
+    }
+    if (!token || !/^\d/.test(token)) {
+      throw new Error('Expected a number.');
+    }
+    consume();
+    let value = Number(token);
+    while (peek() === '%') {
+      consume('%');
+      value /= 100;
+    }
+    return value;
+  }
+
+  function parsePower() {
+    let value = parsePrimary();
+    if (peek() === '^') {
+      consume('^');
+      value = value ** parsePower();
+    }
+    return value;
+  }
+
+  function parseMultiplyDivide() {
+    let value = parsePower();
+    while (peek() === '*' || peek() === '/') {
+      const operator = consume();
+      const right = parsePower();
+      value = operator === '*' ? value * right : value / right;
+    }
+    return value;
+  }
+
+  function parseAddSubtract() {
+    let value = parseMultiplyDivide();
+    while (peek() === '+' || peek() === '-') {
+      const operator = consume();
+      const right = parseMultiplyDivide();
+      value = operator === '+' ? value + right : value - right;
+    }
+    return value;
+  }
+
+  const value = parseAddSubtract();
+  if (index !== tokens.length) {
+    throw new Error('Unexpected extra input.');
+  }
+  return value;
+}
+
+function tryAnswerMath(message) {
+  const expression = extractMathExpression(message);
+  if (!expression) {
+    return '';
+  }
+  try {
+    const value = parseMathExpression(expression);
+    if (!Number.isFinite(value)) {
+      return 'That math expression does not have a finite answer.';
+    }
+    return `${expression.replace(/\s+/g, ' ')} = ${formatNumber(value)}`;
+  } catch (_error) {
+    return '';
+  }
+}
+
+function answerBasicConversation(message, memory, documentCount) {
+  const lowerMessage = String(message || '').toLowerCase();
+  const lastTopic = memory.recentUserTopics.find((topic) => topic && topic !== message);
+
+  if (/\b(how are you|how's it going|how are things)\b/.test(lowerMessage)) {
+    return 'I am doing well and ready to help. I can chat, solve basic math, remember the current conversation, and search the local knowledge files when your question needs project-specific details.';
+  }
+
+  if (/\b(thanks|thank you|appreciate it)\b/.test(lowerMessage)) {
+    return 'You are welcome! Ask me another question whenever you are ready.';
+  }
+
+  if (/\b(what can you do|help|capabilities|skills)\b/.test(lowerMessage)) {
+    return [
+      'I can handle basic conversation, arithmetic, short explanations, and simple follow-up context in this chat.',
+      `I can also search ${documentCount} local knowledge file(s) for project-specific answers.`,
+      'For facts outside those files, I will stay cautious instead of pretending I know more than I do.',
+    ].join(' ');
+  }
+
+  if (/\b(who are you|what are you|your name)\b/.test(lowerMessage)) {
+    return 'I am the Local AI in this prototype: a small local chat assistant built from rules, conversation memory, arithmetic handling, and local-file retrieval.';
+  }
+
+  if (/\b(remember|what did i ask|previous|last thing)\b/.test(lowerMessage)) {
+    return lastTopic
+      ? `The recent topic I have from this chat is: “${lastTopic}”.`
+      : 'I do not have an earlier user topic in this current chat yet.';
+  }
+
+  return '';
+}
+
 function createFallback(message, memory) {
   const topic = tokenize(message).slice(0, 6).join(', ') || 'that topic';
-  const memoryLine = memory.recentUserTopics.length
-    ? ` I remember you recently asked about: ${memory.recentUserTopics.join(' | ')}.`
-    : '';
+  const followUp = memory.recentUserTopics.length > 1
+    ? 'If this is a follow-up, add one more detail and I will connect it to the current chat context.'
+    : 'You can ask conversational questions, basic math, or questions about files in local_knowledge/.';
   return [
-    `I do not have a confident local-knowledge match for ${topic}.`,
-    'I am a local retrieval-and-rules chat interface, not a trained hosted LLM, so I should not invent facts.',
-    `${memoryLine} Try asking about the files listed in the Local knowledge panel, or add more .txt/.md/.json files under local_knowledge/ and ask again.`,
+    `I am not fully sure how to answer ${topic} from the local knowledge I have right now.`,
+    'I can still help with basic conversation, arithmetic, and project questions grounded in local files.',
+    followUp,
   ].join(' ');
 }
 
@@ -227,13 +384,33 @@ function createLocalChatResponse({ message, history }) {
     };
   }
 
-  if (/\b(hello|hi|hey|start|help)\b/.test(lowerMessage)) {
+  if (/\b(hello|hi|hey|start)\b/.test(lowerMessage)) {
     return {
       answer: [
-        'Hi — I am running fully locally. I can chat using current-conversation memory and search local text files before answering.',
+        'Hi! I am ready to chat locally.',
+        'You can ask me everyday questions, basic arithmetic like “20 + 5”, follow-up questions in this conversation, or questions about the local knowledge files.',
         `Right now I loaded ${search.documents.length} local knowledge file(s) from local_knowledge/.`,
-        'Ask about the prototype, the bundled model pieces, local-only rules, or add more text files to local_knowledge/ and refresh.',
       ].join('\n\n'),
+      memory,
+      sources: [],
+      documents: search.documents,
+    };
+  }
+
+  const mathAnswer = tryAnswerMath(normalizedMessage);
+  if (mathAnswer) {
+    return {
+      answer: mathAnswer,
+      memory,
+      sources: [],
+      documents: search.documents,
+    };
+  }
+
+  const basicAnswer = answerBasicConversation(normalizedMessage, memory, search.documents.length);
+  if (basicAnswer) {
+    return {
+      answer: basicAnswer,
       memory,
       sources: [],
       documents: search.documents,
@@ -498,7 +675,16 @@ const server = http.createServer(async (request, response) => {
   }
 });
 
-server.listen(PORT, () => {
-  console.log(`Local conversation prototype running at http://localhost:${PORT}`);
-  console.log('No external AI service is used. Add local text files under local_knowledge/ to expand retrieval.');
-});
+if (require.main === module) {
+  server.listen(PORT, () => {
+    console.log(`Local conversation prototype running at http://localhost:${PORT}`);
+    console.log('No external AI service is used. Add local text files under local_knowledge/ to expand retrieval.');
+  });
+}
+
+module.exports = {
+  createLocalChatResponse,
+  parseMathExpression,
+  tryAnswerMath,
+  server,
+};
