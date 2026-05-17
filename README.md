@@ -11,6 +11,14 @@ git pull
 npm start
 ```
 
+The same server can also be launched through the GitHub-friendly npm aliases:
+
+```bash
+npm run github start
+# or
+npm run github:start
+```
+
 Local training is a separate feature and runs with:
 
 ```bash

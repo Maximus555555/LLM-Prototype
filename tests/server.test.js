@@ -118,3 +118,17 @@ test('background training is opt-in so the server stays responsive by default', 
   assert.doesNotMatch(serverSource, /const BACKGROUND_TRAINING_ENABLED = process\.env\.DISABLE_BACKGROUND_TRAINING !== '1'/);
   assert.match(serverSource, /let knowledgeBaseCache = null/);
 });
+
+test('package exposes GitHub start aliases that launch the same Node server', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const packageJson = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
+  const githubStart = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'github-start.js'), 'utf8');
+
+  assert.equal(packageJson.scripts.start, 'node server.js');
+  assert.equal(packageJson.scripts.github, 'node scripts/github-start.js');
+  assert.equal(packageJson.scripts['github:start'], 'node scripts/github-start.js start');
+  assert.equal(packageJson.scripts['github-start'], 'node scripts/github-start.js start');
+  assert.match(githubStart, /server\.js/);
+  assert.match(githubStart, /spawn\(process\.execPath, \[serverPath\]/);
+});
