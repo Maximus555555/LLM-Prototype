@@ -6,6 +6,9 @@
   "type": "commonjs",
   "scripts": {
     "start": "node server.js",
+    "github": "node scripts/github-start.js",
+    "github:start": "node scripts/github-start.js start",
+    "github-start": "node scripts/github-start.js start",
     "test": "node --test tests/server.test.js && python -m pytest",
     "train": "PYTHONPATH=src python3 scripts/train.py"
   },
