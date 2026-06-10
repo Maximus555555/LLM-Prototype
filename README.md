@@ -51,6 +51,8 @@ The included web app provides:
 
 The default chat experience is a **local retrieval-and-rules assistant**, not a hosted trained LLM. It uses current browser chat history, local/web knowledge search, arithmetic parsing, and response templates to feel conversational while staying transparent about its limits. Saved knowledge simulates learning through persistent retrieval/memory ingestion; it does not retrain model weights unless you separately run the local training pipeline.
 
+For a deeper explanation of why this prototype is not Claude-class and what would need to change to run stronger models locally without hosted AI APIs, see [`docs/local-llm-upgrade-plan.md`](docs/local-llm-upgrade-plan.md).
+
 ## Feeding local and web content into the app
 
 Add generated or local-only content to the `local_knowledge/` folder. Supported file extensions are:
