@@ -6,9 +6,13 @@
   "num_heads": 4,
   "feed_forward_dim": 512,
   "dropout": 0.1,
-  "layer_norm_epsilon": 0.00001,
+  "layer_norm_epsilon": 1e-05,
   "tie_token_embeddings": true,
   "pad_token_id": 256,
   "bos_token_id": 257,
-  "eos_token_id": 258
+  "eos_token_id": 258,
+  "norm_type": "rmsnorm",
+  "activation": "swiglu",
+  "position_encoding": "rope",
+  "use_scaled_dot_product_attention": true
 }

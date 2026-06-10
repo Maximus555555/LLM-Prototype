@@ -34,6 +34,19 @@ def test_bpe_tokenizer_round_trip(tmp_path: Path) -> None:
     assert loaded.decode(loaded.encode("banana")) == "banana"
 
 
+def test_modern_config_defaults_enable_local_llm_building_blocks() -> None:
+    config = tiny_config()
+    assert config.norm_type == "rmsnorm"
+    assert config.activation == "swiglu"
+    assert config.position_encoding == "rope"
+    assert config.use_scaled_dot_product_attention is True
+    pytest.importorskip("torch")
+    from llm_prototype.model import RMSNorm
+
+    norm = RMSNorm(config.embedding_dim)
+    assert norm.weight.shape[0] == config.embedding_dim
+
+
 def test_model_forward_generate_and_checkpoint(tmp_path: Path) -> None:
     torch = pytest.importorskip("torch")
     from llm_prototype.model import TransformerLanguageModel
@@ -44,7 +57,7 @@ def test_model_forward_generate_and_checkpoint(tmp_path: Path) -> None:
     assert output["logits"].shape == (2, 8, model.config.vocab_size)
     assert output["loss"] is not None
 
-    generated = model.generate(input_ids[:1, :4], max_new_tokens=3, top_k=10)
+    generated = model.generate(input_ids[:1, :4], max_new_tokens=3, top_k=10, top_p=0.95, repetition_penalty=1.05)
     assert generated.shape == (1, 7)
 
     checkpoint_path = tmp_path / "model.pt"

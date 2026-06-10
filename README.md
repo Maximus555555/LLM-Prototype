@@ -48,6 +48,8 @@ The included web app provides:
 - Retrieval over both local files and saved web/user knowledge before responding.
 - Fallback responses when the saved knowledge does not contain enough matching information.
 - A local-first design: no OpenAI calls, no API keys, and no paid service dependencies.
+- Expert local assistant scaffolding for coding, reasoning, and writing prompts, including task decomposition, grounded local-context use, and self-review reminders without calling Claude, Codex, OpenAI, or any hosted AI API.
+- A more modern bundled PyTorch transformer configuration using RMSNorm, SwiGLU feed-forward layers, rotary position embeddings, PyTorch scaled-dot-product attention when available, nucleus sampling, and repetition penalty controls.
 
 The default chat experience is a **local retrieval-and-rules assistant**, not a hosted trained LLM. It uses current browser chat history, local/web knowledge search, arithmetic parsing, and response templates to feel conversational while staying transparent about its limits. Saved knowledge simulates learning through persistent retrieval/memory ingestion; it does not retrain model weights unless you separately run the local training pipeline.
 
@@ -75,6 +77,8 @@ The visible browser interface no longer shows the local generator panel, keeping
 - **Local Python transformer**: calls the repository's bundled transformer through `llm_prototype.inference` when Python and PyTorch are installed.
 
 Because no trained weights are included, the bundled transformer is not a knowledgeable conversational model by default. Its output is random unless you supply locally trained checkpoints. For useful conversation, use the local chat, URL article/page handling, and retrieval system.
+
+The bundled architecture has been upgraded toward common frontier-model building blocks, but architecture alone does not make it Claude- or Codex-class. Quality still depends on local weights, dataset scale, instruction tuning, evaluation, and hardware. The project intentionally avoids external AI APIs; stronger behavior should come from local checkpoints, local retrieval memory, and local training data.
 
 
 ## Local training pipeline

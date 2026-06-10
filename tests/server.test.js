@@ -132,3 +132,13 @@ test('package exposes GitHub start aliases that launch the same Node server', ()
   assert.match(githubStart, /server\.js/);
   assert.match(githubStart, /spawn\(process\.execPath, \[serverPath\]/);
 });
+
+test('advanced local assistant mode handles coding/model upgrade prompts without hosted APIs', () => {
+  const { detectAdvancedAssistantIntent } = require('../server');
+  const response = answer('Upgrade this model like Codex but do not use external APIs');
+
+  assert.equal(detectAdvancedAssistantIntent('Please debug this Python function'), 'coding');
+  assert.match(response, /Expert-reasoning mode|Professional-coder mode/i);
+  assert.match(response, /does not call Claude, Codex, OpenAI, or any hosted AI API/i);
+  assert.match(response, /strong local weights/i);
+});
