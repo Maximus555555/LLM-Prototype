@@ -20,6 +20,10 @@ class ModelConfig:
     feed_forward_dim: int = 1536
     dropout: float = 0.1
     layer_norm_epsilon: float = 1e-5
+    norm_type: str = "rmsnorm"
+    activation: str = "swiglu"
+    position_encoding: str = "rope"
+    use_scaled_dot_product_attention: bool = True
     tie_token_embeddings: bool = True
     pad_token_id: int = 256
     bos_token_id: int = 257
@@ -34,6 +38,14 @@ class ModelConfig:
             raise ValueError("vocab_size must be positive")
         if self.dropout < 0 or self.dropout >= 1:
             raise ValueError("dropout must be in the range [0, 1)")
+        if self.norm_type not in {"layernorm", "rmsnorm"}:
+            raise ValueError("norm_type must be either layernorm or rmsnorm")
+        if self.activation not in {"gelu", "swiglu"}:
+            raise ValueError("activation must be either gelu or swiglu")
+        if self.position_encoding not in {"learned", "rope"}:
+            raise ValueError("position_encoding must be either learned or rope")
+        if self.position_encoding == "rope" and (self.embedding_dim // self.num_heads) % 2 != 0:
+            raise ValueError("RoPE requires an even attention head dimension")
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "ModelConfig":

@@ -19,6 +19,8 @@ def generate_text(
     max_new_tokens: int = 80,
     temperature: float = 0.8,
     top_k: int | None = 50,
+    top_p: float | None = 0.95,
+    repetition_penalty: float = 1.05,
     device: str = "cpu",
 ) -> str:
     """Encode a prompt, generate continuation tokens, and decode to text."""
@@ -30,6 +32,8 @@ def generate_text(
         max_new_tokens=max_new_tokens,
         temperature=temperature,
         top_k=top_k,
+        top_p=top_p,
+        repetition_penalty=repetition_penalty,
         eos_token_id=tokenizer.eos_token_id,
     )[0].tolist()
     return tokenizer.decode(output_ids)
@@ -50,6 +54,8 @@ def main() -> None:
     parser.add_argument("--max-new-tokens", type=int, default=80)
     parser.add_argument("--temperature", type=float, default=0.8)
     parser.add_argument("--top-k", type=int, default=50)
+    parser.add_argument("--top-p", type=float, default=0.95)
+    parser.add_argument("--repetition-penalty", type=float, default=1.05)
     parser.add_argument("--device", type=str, default="cpu")
     args = parser.parse_args()
 
@@ -62,7 +68,17 @@ def main() -> None:
     if args.tokenizer:
         tokenizer = BPETokenizer.load(args.tokenizer)
 
-    print(generate_text(model, tokenizer, args.prompt, args.max_new_tokens, args.temperature, args.top_k, args.device))
+    print(generate_text(
+        model,
+        tokenizer,
+        args.prompt,
+        args.max_new_tokens,
+        args.temperature,
+        args.top_k,
+        args.top_p,
+        args.repetition_penalty,
+        args.device,
+    ))
 
 
 if __name__ == "__main__":

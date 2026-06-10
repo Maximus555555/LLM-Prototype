@@ -1042,6 +1042,82 @@ function answerBasicConversation(message, memory, documentCount) {
   return '';
 }
 
+
+function detectAdvancedAssistantIntent(message) {
+  const text = String(message || '').toLowerCase();
+  const coding = /\b(code|coder|program|debug|bug|test|refactor|function|class|api|server|javascript|python|node|react|sql|typescript)\b/.test(text);
+  const reasoning = /\b(plan|architecture|design|reason|analyze|compare|review|improve|upgrade|claude|codex|llm|model|agent)\b/.test(text);
+  const writing = /\b(write|draft|explain|summarize|outline|proposal|email|document)\b/.test(text);
+  if (coding) {
+    return 'coding';
+  }
+  if (reasoning) {
+    return 'reasoning';
+  }
+  if (writing) {
+    return 'writing';
+  }
+  return '';
+}
+
+function createAdvancedLocalAnswer(message, memory, search) {
+  const intent = detectAdvancedAssistantIntent(message);
+  if (!intent) {
+    return null;
+  }
+  const matches = search.matches || [];
+  const groundedEvidence = matches.slice(0, 3).map((match, index) => {
+    const compact = match.content.replace(/\n+/g, ' ').replace(/\s+/g, ' ').trim();
+    return `${index + 1}. ${compact}`;
+  });
+  const sourceList = matches.map((match) => `${match.source}#chunk-${match.chunk}`);
+  const ask = String(message || '').trim();
+  const contextLine = memory.recentUserTopics.length > 1
+    ? `I will also keep this connected to the recent chat topic: ${memory.recentUserTopics.slice(-2).join(' | ')}.`
+    : 'I will answer this as a fresh local task.';
+  const expertModes = {
+    coding: [
+      'Professional-coder mode (local only): I will treat this like an implementation task.',
+      '1. Clarify the goal and constraints from your prompt.',
+      '2. Decompose the work into small, testable steps.',
+      '3. Prefer simple, dependency-free code unless you explicitly ask for a library.',
+      '4. Include verification ideas and edge cases instead of pretending I ran tools I did not run.',
+    ],
+    reasoning: [
+      'Expert-reasoning mode (local only): I will use deliberate planning, grounded retrieval, and self-checking.',
+      '1. Identify assumptions and constraints.',
+      '2. Use relevant local knowledge when available.',
+      '3. Produce a direct answer, then a short self-review for gaps or risks.',
+    ],
+    writing: [
+      'Writing mode (local only): I will optimize for structure, clarity, and usefulness.',
+      '1. State the likely audience and purpose.',
+      '2. Draft a concise, organized response.',
+      '3. Add improvements or alternatives when helpful.',
+    ],
+  };
+  const evidenceSection = groundedEvidence.length
+    ? ['Relevant local context found:', ...groundedEvidence, `Sources: ${sourceList.join(', ')}.`].join('\n')
+    : 'No strong local knowledge match was found, so I am using built-in local reasoning templates rather than external AI services.';
+  const selfReview = [
+    'Self-review:',
+    '- This response is generated locally from rules, retrieval, and the bundled prototype logic; it does not call Claude, Codex, OpenAI, or any hosted AI API.',
+    '- For Claude/Codex-level quality, you still need strong local weights, substantial training data, and enough CPU/GPU memory; this mode improves behavior scaffolding, not raw intelligence.',
+  ].join('\n');
+  return [
+    expertModes[intent].join('\n'),
+    '',
+    `Task understood: ${ask}`,
+    contextLine,
+    '',
+    evidenceSection,
+    '',
+    'Recommended next step: give me the exact files, error output, or desired behavior, and I will produce a concrete local implementation plan or patch-oriented answer.',
+    '',
+    selfReview,
+  ].join('\n');
+}
+
 function createFallback(message, memory) {
   const topic = tokenize(message).slice(0, 6).join(', ') || 'that topic';
   const followUp = memory.recentUserTopics.length > 1
@@ -1098,6 +1174,16 @@ function createLocalChatResponse({ message, history }) {
       answer: basicAnswer,
       memory,
       sources: [],
+      documents: search.documents,
+    };
+  }
+
+  const advancedAnswer = createAdvancedLocalAnswer(normalizedMessage, memory, search);
+  if (advancedAnswer) {
+    return {
+      answer: advancedAnswer,
+      memory,
+      sources: search.matches,
       documents: search.documents,
     };
   }
@@ -1215,7 +1301,7 @@ function demoGenerate(prompt, settings) {
   ].join('\n');
 }
 
-function runPythonGeneration({ prompt, temperature, maxTokens, topK, checkpointPath, tokenizerPath }) {
+function runPythonGeneration({ prompt, temperature, maxTokens, topK, topP, repetitionPenalty, checkpointPath, tokenizerPath }) {
   return new Promise((resolve) => {
     const args = [
       '-m',
@@ -1230,6 +1316,10 @@ function runPythonGeneration({ prompt, temperature, maxTokens, topK, checkpointP
       String(Math.round(clampNumber(maxTokens, 80, 1, 256))),
       '--top-k',
       String(Math.round(clampNumber(topK, 50, 1, 259))),
+      '--top-p',
+      String(clampNumber(topP, 0.95, 0.05, 1)),
+      '--repetition-penalty',
+      String(clampNumber(repetitionPenalty, 1.05, 1, 2)),
       '--device',
       'cpu',
     ];
@@ -1490,6 +1580,8 @@ async function handleApi(request, response, url) {
         temperature: settings.temperature,
         maxTokens: settings.maxTokens,
         topK: settings.topK,
+        topP: settings.topP,
+        repetitionPenalty: settings.repetitionPenalty,
         checkpointPath: settings.modelCheckpointPath,
         tokenizerPath: settings.tokenizerPath,
       });
@@ -1613,6 +1705,8 @@ module.exports = {
   extractNamesDatesNumbers,
   findArticleDetails,
   extractUserProvidedKnowledge,
+  detectAdvancedAssistantIntent,
+  createAdvancedLocalAnswer,
   searchStoredWebKnowledge,
   parseMathExpression,
   tryAnswerMath,
